@@ -143,13 +143,22 @@ function AccountForm({
   const [currency, setCurrency] = useState(account?.currency || "HUF");
   const [color, setColor] = useState(account?.color || COLORS[0]);
   const [initial, setInitial] = useState(account ? String(account.initial_balance) : "0");
+  const [includeInStats, setIncludeInStats] = useState(account?.include_in_stats ?? true);
   const [saving, setSaving] = useState(false);
 
   async function save() {
     if (!name.trim()) return;
     setSaving(true);
     const icon = TYPES.find((t) => t.value === type)?.icon || "wallet";
-    const payload = { name, type, currency, color, icon, initial_balance: Number(initial) || 0 };
+    const payload = {
+      name,
+      type,
+      currency,
+      color,
+      icon,
+      initial_balance: Number(initial) || 0,
+      include_in_stats: includeInStats,
+    };
     if (account) {
       await supabase.from("accounts").update(payload).eq("id", account.id);
     } else {
@@ -228,8 +237,26 @@ function AccountForm({
           type="number"
           value={initial}
           onChange={(e) => setInitial(e.target.value)}
-          className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-5 font-mono tabular"
+          className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
+
+        <button
+          onClick={() => setIncludeInStats((v) => !v)}
+          className="w-full flex items-center justify-between px-1 mb-5"
+        >
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Számítson a statisztikákba</span>
+          <span
+            className={`w-10 h-6 rounded-full relative transition-colors ${
+              includeInStats ? "bg-signal" : "bg-slate-500/20"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                includeInStats ? "translate-x-[18px]" : "translate-x-0.5"
+              }`}
+            />
+          </span>
+        </button>
 
         <div className="flex gap-2">
           {onArchive && (

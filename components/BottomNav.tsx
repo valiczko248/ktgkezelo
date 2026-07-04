@@ -7,6 +7,7 @@ import { Icon } from "./Icon";
 const TABS = [
   { href: "/", label: "Áttekintés", icon: "grid" },
   { href: "/transactions", label: "Tételek", icon: "arrow-left-right" },
+  { href: "/shopping", label: "Bevásárlás", icon: "shopping-cart" },
   { href: "/calendar", label: "Naptár", icon: "calendar" },
   { href: "/stats", label: "Statisztika", icon: "bar-chart" },
   { href: "/settings", label: "Több", icon: "settings" },
@@ -24,7 +25,7 @@ export function BottomNav() {
             <Link
               key={tab.href}
               href={tab.href}
-              className={`flex flex-col items-center justify-center gap-0.5 rounded-2xl px-3 py-1.5 flex-1 transition-colors ${
+              className={`flex flex-col items-center justify-center gap-0.5 rounded-2xl px-1 py-1.5 flex-1 transition-colors ${
                 active ? "text-signal" : "text-slate-400 dark:text-slate-500"
               }`}
             >

@@ -2,18 +2,35 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Account, Category, Transaction } from "@/lib/types";
+import type {
+  Account,
+  Category,
+  ItemRule,
+  Person,
+  Profile,
+  ReceiptItem,
+  Store,
+  Transaction,
+  TransactionSplit,
+} from "@/lib/types";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { TransactionSheet } from "@/components/TransactionSheet";
 import { Icon, Plus } from "@/components/Icon";
 import { formatShortMoney } from "@/lib/format";
+import { openAmount } from "@/lib/splits";
 
 export default function TransactionsPage() {
   const supabase = createClient();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [itemRules, setItemRules] = useState<ItemRule[]>([]);
+  const [receiptItems, setReceiptItems] = useState<ReceiptItem[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [txs, setTxs] = useState<Transaction[]>([]);
+  const [splits, setSplits] = useState<TransactionSplit[]>([]);
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
@@ -25,15 +42,41 @@ export default function TransactionsPage() {
 
   async function loadAll() {
     setLoading(true);
-    const [{ data: acc }, { data: cat }, { data: tx }] = await Promise.all([
-      supabase.from("accounts").select("*").order("sort_order"),
-      supabase.from("categories").select("*").order("sort_order"),
-      supabase.from("transactions").select("*").order("occurred_on", { ascending: false }),
-    ]);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const [{ data: acc }, { data: cat }, { data: ppl }, { data: str }, { data: rules }, { data: ritems }, { data: prof }, { data: tx }, { data: spl }] =
+      await Promise.all([
+        supabase.from("accounts").select("*").order("sort_order"),
+        supabase.from("categories").select("*").order("sort_order"),
+        supabase.from("people").select("*").eq("is_archived", false).order("created_at"),
+        supabase.from("stores").select("*").eq("is_archived", false).order("created_at"),
+        supabase.from("item_rules").select("*"),
+        supabase.from("receipt_items").select("*"),
+        user ? supabase.from("profiles").select("*").eq("id", user.id).single() : Promise.resolve({ data: null }),
+        supabase.from("transactions").select("*").order("occurred_on", { ascending: false }),
+        supabase.from("transaction_splits").select("*"),
+      ]);
     setAccounts(acc || []);
     setCategories(cat || []);
+    setPeople(ppl || []);
+    setStores(str || []);
+    setItemRules(rules || []);
+    setReceiptItems(ritems || []);
+    setProfile(prof || null);
     setTxs(tx || []);
+    setSplits(spl || []);
     setLoading(false);
+  }
+
+  async function createStore(name: string): Promise<Store | null> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data } = await supabase.from("stores").insert({ user_id: user.id, name }).select().single();
+    if (data) setStores((prev) => [...prev, data]);
+    return data || null;
   }
 
   useEffect(() => {
@@ -60,11 +103,30 @@ export default function TransactionsPage() {
     return Object.entries(map).sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [filtered]);
 
+  const splitsByTx = useMemo(() => {
+    const map: Record<string, TransactionSplit[]> = {};
+    for (const s of splits) {
+      map[s.transaction_id] = map[s.transaction_id] || [];
+      map[s.transaction_id].push(s);
+    }
+    return map;
+  }, [splits]);
+
   function categoryOf(id: string | null) {
     return categories.find((c) => c.id === id);
   }
   function accountOf(id: string) {
     return accounts.find((a) => a.id === id);
+  }
+  function personOf(id: string) {
+    return people.find((p) => p.id === id);
+  }
+  function splitBadge(txId: string) {
+    const rows = splitsByTx[txId];
+    if (!rows || rows.length === 0) return null;
+    const hasOpen = rows.some((s) => openAmount(s) > 0);
+    const names = rows.map((s) => personOf(s.person_id)?.name).filter(Boolean).join(", ");
+    return { names, hasOpen };
   }
 
   return (
@@ -132,6 +194,7 @@ export default function TransactionsPage() {
                 {items.map((t) => {
                   const cat = categoryOf(t.category_id);
                   const acc = accountOf(t.account_id);
+                  const badge = splitBadge(t.id);
                   return (
                     <button
                       key={t.id}
@@ -157,6 +220,11 @@ export default function TransactionsPage() {
                           {acc?.name}
                           {t.note ? ` · ${t.note}` : ""}
                         </p>
+                        {badge && (
+                          <p className={`text-[11px] mt-0.5 ${badge.hasOpen ? "text-coral" : "text-mint-dark"}`}>
+                            megosztva: {badge.names} {badge.hasOpen ? "(nyitva)" : "(elszámolva)"}
+                          </p>
+                        )}
                       </div>
                       <p
                         className={`font-mono tabular text-sm font-semibold shrink-0 ${
@@ -189,6 +257,13 @@ export default function TransactionsPage() {
         <TransactionSheet
           accounts={accounts}
           categories={categories}
+          people={people}
+          stores={stores}
+          itemRules={itemRules}
+          priorReceiptItems={receiptItems}
+          defaultSplitPersonId={profile?.default_split_person_id || null}
+          warnOnPriceChange={profile?.warn_on_price_change ?? true}
+          onCreateStore={createStore}
           editing={editing}
           onClose={() => setSheetOpen(false)}
           onSaved={() => {

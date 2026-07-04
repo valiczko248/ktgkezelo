@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Account, Category, Transaction } from "@/lib/types";
+import type { Account, Category, Transaction, TransactionSplit } from "@/lib/types";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Icon } from "@/components/Icon";
 import { formatShortMoney } from "@/lib/format";
+import { netAmount, splitTotalsByTransaction } from "@/lib/splits";
+import { excludedAccountIds } from "@/lib/accounts";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
   Tooltip, LineChart, Line, CartesianGrid,
@@ -27,6 +29,7 @@ export default function StatsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [txs, setTxs] = useState<Transaction[]>([]);
+  const [splits, setSplits] = useState<TransactionSplit[]>([]);
   const [period, setPeriod] = useState<Period>("this_month");
   const [currency, setCurrency] = useState<string>("HUF");
   const [loading, setLoading] = useState(true);
@@ -34,19 +37,25 @@ export default function StatsPage() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const [{ data: cat }, { data: acc }, { data: tx }] = await Promise.all([
+      const [{ data: cat }, { data: acc }, { data: tx }, { data: spl }] = await Promise.all([
         supabase.from("categories").select("*"),
         supabase.from("accounts").select("*"),
         supabase.from("transactions").select("*").order("occurred_on"),
+        supabase.from("transaction_splits").select("*"),
       ]);
       setCategories(cat || []);
       setAccounts(acc || []);
       setTxs(tx || []);
+      setSplits(spl || []);
       if (acc && acc.length) setCurrency(acc[0].currency);
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const splitTotals = useMemo(() => splitTotalsByTransaction(splits), [splits]);
+  const excludedIds = useMemo(() => excludedAccountIds(accounts), [accounts]);
+  const visibleTxs = useMemo(() => txs.filter((t) => !excludedIds.has(t.account_id)), [txs, excludedIds]);
 
   const range = useMemo(() => {
     const now = new Date();
@@ -73,40 +82,44 @@ export default function StatsPage() {
 
   const filtered = useMemo(
     () =>
-      txs.filter(
+      visibleTxs.filter(
         (t) =>
           t.currency === currency &&
           t.occurred_on >= fmtISO(range.start) &&
           t.occurred_on <= fmtISO(range.end)
       ),
-    [txs, range, currency]
+    [visibleTxs, range, currency]
   );
   const prevFiltered = useMemo(
     () =>
-      txs.filter(
+      visibleTxs.filter(
         (t) =>
           t.currency === currency &&
           t.occurred_on >= fmtISO(prevRange.start) &&
           t.occurred_on <= fmtISO(prevRange.end)
       ),
-    [txs, prevRange, currency]
+    [visibleTxs, prevRange, currency]
   );
 
-  const totalExpense = filtered.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
+  const totalExpense = filtered
+    .filter((t) => t.type === "expense")
+    .reduce((s, t) => s + netAmount(t, splitTotals), 0);
   const totalIncome = filtered.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
-  const prevExpense = prevFiltered.filter((t) => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
+  const prevExpense = prevFiltered
+    .filter((t) => t.type === "expense")
+    .reduce((s, t) => s + netAmount(t, splitTotals), 0);
   const delta = prevExpense > 0 ? Math.round(((totalExpense - prevExpense) / prevExpense) * 100) : null;
 
   const pieData = useMemo(() => {
     const map: Record<string, number> = {};
     for (const t of filtered) {
       if (t.type !== "expense" || !t.category_id) continue;
-      map[t.category_id] = (map[t.category_id] || 0) + Number(t.amount);
+      map[t.category_id] = (map[t.category_id] || 0) + netAmount(t, splitTotals);
     }
     return Object.entries(map)
       .map(([id, value]) => ({ id, name: categories.find((c) => c.id === id)?.name || "Egyéb", value, color: categories.find((c) => c.id === id)?.color || "#64748B" }))
       .sort((a, b) => b.value - a.value);
-  }, [filtered, categories]);
+  }, [filtered, categories, splitTotals]);
 
   const trendData = useMemo(() => {
     // last 6 months trend, expense vs income
@@ -116,16 +129,16 @@ export default function StatsPage() {
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       months.push({ key, label: new Intl.DateTimeFormat("hu-HU", { month: "short" }).format(d), expense: 0, income: 0 });
     }
-    for (const t of txs) {
+    for (const t of visibleTxs) {
       if (t.currency !== currency) continue;
       const key = t.occurred_on.slice(0, 7);
       const m = months.find((mo) => mo.key === key);
       if (!m) continue;
-      if (t.type === "expense") m.expense += Number(t.amount);
+      if (t.type === "expense") m.expense += netAmount(t, splitTotals);
       if (t.type === "income") m.income += Number(t.amount);
     }
     return months;
-  }, [txs, currency]);
+  }, [visibleTxs, currency, splitTotals]);
 
   const currencies = Array.from(new Set(accounts.map((a) => a.currency)));
 

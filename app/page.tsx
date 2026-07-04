@@ -1,14 +1,31 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import type { Account, Category, Transaction } from "@/lib/types";
+import type {
+  Account,
+  Budget,
+  Category,
+  ItemRule,
+  Person,
+  Profile,
+  Receipt,
+  ReceiptItem,
+  Store,
+  Transaction,
+  TransactionSplit,
+} from "@/lib/types";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { TransactionSheet } from "@/components/TransactionSheet";
 import { ProgressRing } from "@/components/ProgressRing";
 import { Icon, Plus } from "@/components/Icon";
 import { formatMoney, formatShortMoney } from "@/lib/format";
+import { netAmount, openAmount, splitTotalsByTransaction } from "@/lib/splits";
+import { excludedAccountIds } from "@/lib/accounts";
+import { processDueLoans, processDueRecurring } from "@/lib/automations";
+import { budgetPaceInsights, categoryOverspendInsights, storeOverspendInsights } from "@/lib/insights";
 
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -24,9 +41,17 @@ export default function DashboardPage() {
   const supabase = createClient();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [itemRules, setItemRules] = useState<ItemRule[]>([]);
+  const [receiptItems, setReceiptItems] = useState<ReceiptItem[]>([]);
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [prevTxs, setPrevTxs] = useState<Transaction[]>([]);
   const [allTxs, setAllTxs] = useState<Transaction[]>([]);
+  const [splits, setSplits] = useState<TransactionSplit[]>([]);
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
 
@@ -39,9 +64,34 @@ export default function DashboardPage() {
 
   async function loadAll() {
     setLoading(true);
-    const [{ data: acc }, { data: cat }, { data: tx }, { data: ptx }, { data: atx }] = await Promise.all([
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const monthStartISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const [
+      { data: acc },
+      { data: cat },
+      { data: ppl },
+      { data: str },
+      { data: rules },
+      { data: ritems },
+      { data: rec },
+      { data: bud },
+      { data: prof },
+      { data: tx },
+      { data: ptx },
+      { data: atx },
+      { data: spl },
+    ] = await Promise.all([
       supabase.from("accounts").select("*").eq("is_archived", false).order("sort_order"),
       supabase.from("categories").select("*").order("sort_order"),
+      supabase.from("people").select("*").eq("is_archived", false).order("created_at"),
+      supabase.from("stores").select("*").eq("is_archived", false).order("created_at"),
+      supabase.from("item_rules").select("*"),
+      supabase.from("receipt_items").select("*"),
+      supabase.from("receipts").select("*"),
+      supabase.from("budgets").select("*").eq("month", monthStartISO),
+      user ? supabase.from("profiles").select("*").eq("id", user.id).single() : Promise.resolve({ data: null }),
       supabase
         .from("transactions")
         .select("*")
@@ -54,17 +104,48 @@ export default function DashboardPage() {
         .gte("occurred_on", fmtISO(lastMonthStart))
         .lte("occurred_on", fmtISO(lastMonthEnd)),
       supabase.from("transactions").select("*"),
+      supabase.from("transaction_splits").select("*"),
     ]);
     setAccounts(acc || []);
     setCategories(cat || []);
+    setPeople(ppl || []);
+    setStores(str || []);
+    setItemRules(rules || []);
+    setReceiptItems(ritems || []);
+    setReceipts(rec || []);
+    setBudgets(bud || []);
+    setProfile(prof || null);
     setTxs(tx || []);
     setPrevTxs(ptx || []);
     setAllTxs(atx || []);
+    setSplits(spl || []);
     setLoading(false);
   }
 
   useEffect(() => {
-    loadAll();
+    (async () => {
+      await loadAll();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: acc } = await supabase.from("accounts").select("*");
+      const hasDueRecurring = await supabase
+        .from("recurring_rules")
+        .select("id", { count: "exact", head: true })
+        .eq("active", true)
+        .lte("next_run_date", new Date().toISOString().slice(0, 10));
+      const hasDueLoans = await supabase
+        .from("loans")
+        .select("id", { count: "exact", head: true })
+        .eq("active", true)
+        .lte("next_run_date", new Date().toISOString().slice(0, 10));
+      if ((hasDueRecurring.count || 0) > 0 || (hasDueLoans.count || 0) > 0) {
+        await processDueRecurring(supabase, user.id);
+        await processDueLoans(supabase, user.id, acc || []);
+        await loadAll();
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -84,43 +165,64 @@ export default function DashboardPage() {
     return map;
   }, [accounts, allTxs]);
 
+  const excludedIds = useMemo(() => excludedAccountIds(accounts), [accounts]);
+
   const balancesByCurrency = useMemo(() => {
     const map: Record<string, number> = {};
     for (const a of accounts) {
+      if (excludedIds.has(a.id)) continue;
       map[a.currency] = (map[a.currency] || 0) + (accountBalances[a.id] ?? Number(a.initial_balance));
     }
     return map;
-  }, [accounts, accountBalances]);
+  }, [accounts, accountBalances, excludedIds]);
+
+  const splitTotals = useMemo(() => splitTotalsByTransaction(splits), [splits]);
+
+  const openBalanceByCurrency = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const s of splits) {
+      const open = openAmount(s);
+      if (open <= 0) continue;
+      const tx = allTxs.find((t) => t.id === s.transaction_id);
+      const cur = tx?.currency || "HUF";
+      map[cur] = (map[cur] || 0) + open;
+    }
+    return map;
+  }, [splits, allTxs]);
 
   const spendByCurrency = useMemo(() => {
     const map: Record<string, number> = {};
     for (const t of txs) {
-      if (t.type === "expense") map[t.currency] = (map[t.currency] || 0) + Number(t.amount);
+      if (excludedIds.has(t.account_id)) continue;
+      if (t.type === "expense") map[t.currency] = (map[t.currency] || 0) + netAmount(t, splitTotals);
     }
     return map;
-  }, [txs]);
+  }, [txs, splitTotals, excludedIds]);
 
   const incomeByCurrency = useMemo(() => {
     const map: Record<string, number> = {};
     for (const t of txs) {
+      if (excludedIds.has(t.account_id)) continue;
       if (t.type === "income") map[t.currency] = (map[t.currency] || 0) + Number(t.amount);
     }
     return map;
-  }, [txs]);
+  }, [txs, excludedIds]);
 
   const prevSpendByCurrency = useMemo(() => {
     const map: Record<string, number> = {};
     for (const t of prevTxs) {
-      if (t.type === "expense") map[t.currency] = (map[t.currency] || 0) + Number(t.amount);
+      if (excludedIds.has(t.account_id)) continue;
+      if (t.type === "expense") map[t.currency] = (map[t.currency] || 0) + netAmount(t, splitTotals);
     }
     return map;
-  }, [prevTxs]);
+  }, [prevTxs, splitTotals, excludedIds]);
 
   const topCategories = useMemo(() => {
     const map: Record<string, number> = {};
     for (const t of txs) {
+      if (excludedIds.has(t.account_id)) continue;
       if (t.type !== "expense" || !t.category_id) continue;
-      map[t.category_id] = (map[t.category_id] || 0) + Number(t.amount);
+      map[t.category_id] = (map[t.category_id] || 0) + netAmount(t, splitTotals);
     }
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
@@ -130,7 +232,36 @@ export default function DashboardPage() {
         amount,
       }))
       .filter((x) => x.category);
-  }, [txs, categories]);
+  }, [txs, categories, splitTotals, excludedIds]);
+
+  const spentByCategoryAll = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const t of txs) {
+      if (excludedIds.has(t.account_id)) continue;
+      if (t.type !== "expense" || !t.category_id) continue;
+      map[t.category_id] = (map[t.category_id] || 0) + netAmount(t, splitTotals);
+    }
+    return map;
+  }, [txs, splitTotals, excludedIds]);
+
+  const insights = useMemo(() => {
+    const thisMonthItems = receiptItems.filter((it) => {
+      const receipt = receipts.find((r) => r.id === it.receipt_id);
+      return receipt && receipt.occurred_on >= fmtISO(thisMonthStart) && receipt.occurred_on <= fmtISO(thisMonthEnd);
+    });
+    const lastMonthItems = receiptItems.filter((it) => {
+      const receipt = receipts.find((r) => r.id === it.receipt_id);
+      return receipt && receipt.occurred_on >= fmtISO(lastMonthStart) && receipt.occurred_on <= fmtISO(lastMonthEnd);
+    });
+    const visibleTxs = txs.filter((t) => !excludedIds.has(t.account_id));
+    const visiblePrevTxs = prevTxs.filter((t) => !excludedIds.has(t.account_id));
+    return [
+      ...categoryOverspendInsights(visibleTxs, visiblePrevTxs, categories, splitTotals),
+      ...storeOverspendInsights(thisMonthItems, lastMonthItems, receipts, stores),
+      ...budgetPaceInsights(spentByCategoryAll, budgets, categories, now),
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txs, prevTxs, categories, splitTotals, excludedIds, receiptItems, receipts, stores, spentByCategoryAll, budgets]);
 
   const currencies = Object.keys({ ...spendByCurrency, ...incomeByCurrency, ...balancesByCurrency });
   const primaryCurrency = currencies[0] || "HUF";
@@ -140,6 +271,16 @@ export default function DashboardPage() {
   }
   function accountOf(id: string) {
     return accounts.find((a) => a.id === id);
+  }
+
+  async function createStore(name: string): Promise<Store | null> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data } = await supabase.from("stores").insert({ user_id: user.id, name }).select().single();
+    if (data) setStores((prev) => [...prev, data]);
+    return data || null;
   }
 
   return (
@@ -152,6 +293,44 @@ export default function DashboardPage() {
         <EmptyAccountsState onCreated={loadAll} />
       ) : (
         <>
+          {/* Open settlement reminder */}
+          {Object.entries(openBalanceByCurrency).some(([, v]) => v > 0) && (
+            <Link
+              href="/people"
+              className="flex items-center gap-3 glass rounded-4xl p-4 mb-5 animate-fade-up border border-coral/20"
+            >
+              <div className="w-9 h-9 rounded-full bg-coral/10 flex items-center justify-center shrink-0">
+                <Icon name="users" className="w-4.5 h-4.5 text-coral" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Van elszámolatlan tételed</p>
+                <p className="text-xs text-slate-400">
+                  {Object.entries(openBalanceByCurrency)
+                    .filter(([, v]) => v > 0)
+                    .map(([cur, v]) => formatShortMoney(v, cur))
+                    .join(" · ")}{" "}
+                  nyitva
+                </p>
+              </div>
+            </Link>
+          )}
+
+          {/* Figyelmeztetések */}
+          {insights.length > 0 && (
+            <div className="glass rounded-4xl p-5 mb-5 animate-fade-up border border-amber-500/20">
+              <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-1.5">
+                <Icon name="alert-triangle" className="w-4 h-4 text-amber-500" /> Figyelmeztetések
+              </h2>
+              <div className="space-y-2">
+                {insights.map((ins) => (
+                  <p key={ins.id} className="text-sm text-slate-600 dark:text-slate-300">
+                    {ins.text}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Balance cards per currency */}
           <div className="flex gap-3 overflow-x-auto pb-2 mb-5 -mx-5 px-5">
             {currencies.map((cur) => (
@@ -291,6 +470,13 @@ export default function DashboardPage() {
         <TransactionSheet
           accounts={accounts}
           categories={categories}
+          people={people}
+          stores={stores}
+          itemRules={itemRules}
+          priorReceiptItems={receiptItems}
+          defaultSplitPersonId={profile?.default_split_person_id || null}
+          warnOnPriceChange={profile?.warn_on_price_change ?? true}
+          onCreateStore={createStore}
           onClose={() => setSheetOpen(false)}
           onSaved={() => {
             setSheetOpen(false);

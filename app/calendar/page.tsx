@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Account, Category, DayNote, Transaction } from "@/lib/types";
+import type { Account, Category, DayNote, ItemRule, Person, Profile, ReceiptItem, Store, Transaction } from "@/lib/types";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { TransactionSheet } from "@/components/TransactionSheet";
@@ -18,6 +18,11 @@ export default function CalendarPage() {
   const [cursor, setCursor] = useState(new Date());
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [itemRules, setItemRules] = useState<ItemRule[]>([]);
+  const [receiptItems, setReceiptItems] = useState<ReceiptItem[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [dayNotes, setDayNotes] = useState<DayNote[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -29,24 +34,48 @@ export default function CalendarPage() {
   const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
 
   async function loadAll() {
-    const [{ data: acc }, { data: cat }, { data: tx }, { data: notes }] = await Promise.all([
-      supabase.from("accounts").select("*"),
-      supabase.from("categories").select("*"),
-      supabase
-        .from("transactions")
-        .select("*")
-        .gte("occurred_on", fmtISO(monthStart))
-        .lte("occurred_on", fmtISO(monthEnd)),
-      supabase
-        .from("day_notes")
-        .select("*")
-        .gte("the_date", fmtISO(monthStart))
-        .lte("the_date", fmtISO(monthEnd)),
-    ]);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const [{ data: acc }, { data: cat }, { data: ppl }, { data: str }, { data: rules }, { data: ritems }, { data: prof }, { data: tx }, { data: notes }] =
+      await Promise.all([
+        supabase.from("accounts").select("*"),
+        supabase.from("categories").select("*"),
+        supabase.from("people").select("*").eq("is_archived", false).order("created_at"),
+        supabase.from("stores").select("*").eq("is_archived", false).order("created_at"),
+        supabase.from("item_rules").select("*"),
+        supabase.from("receipt_items").select("*"),
+        user ? supabase.from("profiles").select("*").eq("id", user.id).single() : Promise.resolve({ data: null }),
+        supabase
+          .from("transactions")
+          .select("*")
+          .gte("occurred_on", fmtISO(monthStart))
+          .lte("occurred_on", fmtISO(monthEnd)),
+        supabase
+          .from("day_notes")
+          .select("*")
+          .gte("the_date", fmtISO(monthStart))
+          .lte("the_date", fmtISO(monthEnd)),
+      ]);
     setAccounts(acc || []);
     setCategories(cat || []);
+    setPeople(ppl || []);
+    setStores(str || []);
+    setItemRules(rules || []);
+    setReceiptItems(ritems || []);
+    setProfile(prof || null);
     setTxs(tx || []);
     setDayNotes(notes || []);
+  }
+
+  async function createStore(name: string): Promise<Store | null> {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data } = await supabase.from("stores").insert({ user_id: user.id, name }).select().single();
+    if (data) setStores((prev) => [...prev, data]);
+    return data || null;
   }
 
   useEffect(() => {
@@ -257,6 +286,13 @@ export default function CalendarPage() {
         <TransactionSheet
           accounts={accounts}
           categories={categories}
+          people={people}
+          stores={stores}
+          itemRules={itemRules}
+          priorReceiptItems={receiptItems}
+          defaultSplitPersonId={profile?.default_split_person_id || null}
+          warnOnPriceChange={profile?.warn_on_price_change ?? true}
+          onCreateStore={createStore}
           editing={editing}
           defaultDate={selectedDate || undefined}
           onClose={() => setSheetOpen(false)}

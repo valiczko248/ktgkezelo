@@ -7,6 +7,7 @@ import type { Account, Category, Frequency, RecurringRule } from "@/lib/types";
 import { BottomNav } from "@/components/BottomNav";
 import { Icon, Plus, X, ChevronLeft, Trash2 } from "@/components/Icon";
 import { formatMoney } from "@/lib/format";
+import { processDueRecurring } from "@/lib/automations";
 
 const FREQ_LABEL: Record<Frequency, string> = {
   daily: "Naponta",
@@ -40,43 +41,13 @@ export default function RecurringPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function nextDate(from: string, freq: Frequency): string {
-    const d = new Date(from);
-    if (freq === "daily") d.setDate(d.getDate() + 1);
-    if (freq === "weekly") d.setDate(d.getDate() + 7);
-    if (freq === "monthly") d.setMonth(d.getMonth() + 1);
-    if (freq === "yearly") d.setFullYear(d.getFullYear() + 1);
-    return d.toISOString().slice(0, 10);
-  }
-
   // Lefuttatja az esedékes automatikus tételeket (kliens oldali "cron" belépéskor)
   async function processDue() {
     setRunning(true);
-    const today = new Date().toISOString().slice(0, 10);
-    const due = rules.filter((r) => r.active && r.next_run_date <= today);
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (user) {
-      for (const r of due) {
-        let runDate = r.next_run_date;
-        while (runDate <= today) {
-          await supabase.from("transactions").insert({
-            user_id: user.id,
-            account_id: r.account_id,
-            category_id: r.category_id,
-            type: r.type,
-            amount: r.amount,
-            currency: r.currency,
-            occurred_on: runDate,
-            note: r.note || r.name,
-            recurring_id: r.id,
-          });
-          runDate = nextDate(runDate, r.frequency);
-        }
-        await supabase.from("recurring_rules").update({ next_run_date: runDate }).eq("id", r.id);
-      }
-    }
+    if (user) await processDueRecurring(supabase, user.id);
     setRunning(false);
     loadAll();
   }
@@ -114,14 +85,15 @@ export default function RecurringPage() {
       <div className="space-y-3 mb-5">
         {rules.map((r) => {
           const acc = accounts.find((a) => a.id === r.account_id);
+          const toAcc = accounts.find((a) => a.id === r.to_account_id);
           const cat = categories.find((c) => c.id === r.category_id);
           return (
             <div key={r.id} className={`glass rounded-3xl p-4 flex items-center gap-3 ${!r.active ? "opacity-50" : ""}`}>
               <div
                 className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0"
-                style={{ backgroundColor: `${cat?.color || "#64748B"}22` }}
+                style={{ backgroundColor: r.type === "transfer" ? "#0A84FF22" : `${cat?.color || "#64748B"}22` }}
               >
-                <Icon name={cat?.icon || "repeat"} className="w-4.5 h-4.5" />
+                <Icon name={r.type === "transfer" ? "arrow-left-right" : cat?.icon || "repeat"} className="w-4.5 h-4.5" />
               </div>
               <button
                 onClick={() => {
@@ -132,12 +104,16 @@ export default function RecurringPage() {
               >
                 <p className="text-sm font-medium truncate">{r.name}</p>
                 <p className="text-xs text-slate-400">
-                  {acc?.name} · {FREQ_LABEL[r.frequency]} · Köv.: {r.next_run_date}
+                  {r.type === "transfer" ? `${acc?.name} → ${toAcc?.name}` : acc?.name} · {FREQ_LABEL[r.frequency]} · Köv.: {r.next_run_date}
                 </p>
               </button>
               <div className="text-right shrink-0">
-                <p className={`font-mono tabular text-sm font-semibold ${r.type === "income" ? "text-mint-dark" : "text-coral"}`}>
-                  {r.type === "income" ? "+" : "−"}
+                <p
+                  className={`font-mono tabular text-sm font-semibold ${
+                    r.type === "income" ? "text-mint-dark" : r.type === "transfer" ? "text-signal" : "text-coral"
+                  }`}
+                >
+                  {r.type === "income" ? "+" : r.type === "transfer" ? "" : "−"}
                   {formatMoney(r.amount, r.currency)}
                 </p>
                 <div className="flex items-center gap-2 mt-1 justify-end">
@@ -199,19 +175,21 @@ function RuleForm({
 }) {
   const supabase = createClient();
   const [name, setName] = useState(rule?.name || "");
-  const [type, setType] = useState<"expense" | "income">(rule?.type || "expense");
+  const [type, setType] = useState<"expense" | "income" | "transfer">(rule?.type || "expense");
   const [amount, setAmount] = useState(rule ? String(rule.amount) : "");
   const [accountId, setAccountId] = useState(rule?.account_id || accounts[0]?.id || "");
+  const [toAccountId, setToAccountId] = useState(rule?.to_account_id || "");
   const [categoryId, setCategoryId] = useState(rule?.category_id || "");
   const [frequency, setFrequency] = useState<Frequency>(rule?.frequency || "monthly");
   const [nextRun, setNextRun] = useState(rule?.next_run_date || new Date().toISOString().slice(0, 10));
   const [saving, setSaving] = useState(false);
 
   const account = accounts.find((a) => a.id === accountId);
-  const visibleCategories = categories.filter((c) => c.kind === type);
+  const visibleCategories = categories.filter((c) => c.kind === (type === "transfer" ? "expense" : type));
 
   async function save() {
     if (!name.trim() || !amount || !accountId) return;
+    if (type === "transfer" && (!toAccountId || toAccountId === accountId)) return;
     setSaving(true);
     const payload = {
       name,
@@ -219,7 +197,8 @@ function RuleForm({
       amount: Number(amount),
       currency: account?.currency || "HUF",
       account_id: accountId,
-      category_id: categoryId || null,
+      to_account_id: type === "transfer" ? toAccountId : null,
+      category_id: type === "transfer" ? null : categoryId || null,
       frequency,
       next_run_date: nextRun,
       active: true,
@@ -268,6 +247,12 @@ function RuleForm({
           >
             Bevétel
           </button>
+          <button
+            onClick={() => setType("transfer")}
+            className={`flex-1 py-2 rounded-xl text-xs font-medium ${type === "transfer" ? "bg-white dark:bg-white/10 text-signal" : "text-slate-500"}`}
+          >
+            Átvezetés
+          </button>
         </div>
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Összeg</label>
@@ -278,7 +263,7 @@ function RuleForm({
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
 
-        <label className="text-xs font-medium text-slate-500 mb-1.5 block">Fiók</label>
+        <label className="text-xs font-medium text-slate-500 mb-1.5 block">{type === "transfer" ? "Honnan" : "Fiók"}</label>
         <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
           {accounts.map((a) => (
             <button
@@ -293,20 +278,43 @@ function RuleForm({
           ))}
         </div>
 
-        <label className="text-xs font-medium text-slate-500 mb-1.5 block">Kategória</label>
-        <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
-          {visibleCategories.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => setCategoryId(c.id)}
-              className={`shrink-0 px-3 py-2 rounded-2xl text-xs font-medium border flex items-center gap-1.5 ${
-                categoryId === c.id ? "border-signal bg-signal/10 text-signal" : "border-white/60 dark:border-white/10 glass"
-              }`}
-            >
-              <Icon name={c.icon} className="w-3.5 h-3.5" /> {c.name}
-            </button>
-          ))}
-        </div>
+        {type === "transfer" ? (
+          <>
+            <label className="text-xs font-medium text-slate-500 mb-1.5 block">Hova</label>
+            <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
+              {accounts
+                .filter((a) => a.id !== accountId)
+                .map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => setToAccountId(a.id)}
+                    className={`shrink-0 px-3 py-2 rounded-2xl text-xs font-medium border ${
+                      toAccountId === a.id ? "border-signal bg-signal/10 text-signal" : "border-white/60 dark:border-white/10 glass"
+                    }`}
+                  >
+                    {a.name}
+                  </button>
+                ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <label className="text-xs font-medium text-slate-500 mb-1.5 block">Kategória</label>
+            <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
+              {visibleCategories.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setCategoryId(c.id)}
+                  className={`shrink-0 px-3 py-2 rounded-2xl text-xs font-medium border flex items-center gap-1.5 ${
+                    categoryId === c.id ? "border-signal bg-signal/10 text-signal" : "border-white/60 dark:border-white/10 glass"
+                  }`}
+                >
+                  <Icon name={c.icon} className="w-3.5 h-3.5" /> {c.name}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Gyakoriság</label>
         <div className="flex gap-2 mb-4">

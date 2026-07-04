@@ -6,7 +6,9 @@ import {
   Gift, PlusCircle, Wallet, Tag, CreditCard, PiggyBank, Landmark,
   Coins, ArrowLeftRight, Calendar, BarChart3, Settings, LayoutGrid,
   Plus, X, Check, Pencil, Trash2, ChevronLeft, ChevronRight, Sun, Moon,
-  LogOut, StickyNote, TrendingUp, TrendingDown, type LucideIcon,
+  LogOut, StickyNote, TrendingUp, TrendingDown, Users, Camera, Image as ImageIcon,
+  Link2, FileText, AlertTriangle, Receipt as ReceiptIcon, Target,
+  type LucideIcon,
 } from "lucide-react";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -40,6 +42,14 @@ const ICONS: Record<string, LucideIcon> = {
   "note": StickyNote,
   "trending-up": TrendingUp,
   "trending-down": TrendingDown,
+  "users": Users,
+  "camera": Camera,
+  "image": ImageIcon,
+  "link": Link2,
+  "file-text": FileText,
+  "alert-triangle": AlertTriangle,
+  "receipt": ReceiptIcon,
+  "target": Target,
 };
 
 export { Plus, X, Check, Pencil, Trash2, ChevronLeft, ChevronRight, Sun, Moon, LogOut };

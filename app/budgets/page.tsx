@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import type { Budget, Category, Transaction } from "@/lib/types";
+import type { Account, Budget, Category, Transaction, TransactionSplit } from "@/lib/types";
 import { BottomNav } from "@/components/BottomNav";
 import { Icon, ChevronLeft, X } from "@/components/Icon";
 import { ProgressRing } from "@/components/ProgressRing";
 import { formatShortMoney } from "@/lib/format";
+import { netAmount, splitTotalsByTransaction } from "@/lib/splits";
+import { excludedAccountIds } from "@/lib/accounts";
 
 function monthStartISO(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
@@ -17,24 +19,30 @@ export default function BudgetsPage() {
   const supabase = createClient();
   const [categories, setCategories] = useState<Category[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [txs, setTxs] = useState<Transaction[]>([]);
+  const [splits, setSplits] = useState<TransactionSplit[]>([]);
   const [editing, setEditing] = useState<Category | null>(null);
 
   const month = monthStartISO();
 
   async function loadAll() {
-    const [{ data: cat }, { data: b }, { data: tx }] = await Promise.all([
+    const [{ data: cat }, { data: b }, { data: acc }, { data: tx }, { data: spl }] = await Promise.all([
       supabase.from("categories").select("*").eq("kind", "expense"),
       supabase.from("budgets").select("*").eq("month", month),
+      supabase.from("accounts").select("*"),
       supabase
         .from("transactions")
         .select("*")
         .eq("type", "expense")
         .gte("occurred_on", month),
+      supabase.from("transaction_splits").select("*"),
     ]);
     setCategories(cat || []);
     setBudgets(b || []);
+    setAccounts(acc || []);
     setTxs(tx || []);
+    setSplits(spl || []);
   }
 
   useEffect(() => {
@@ -42,14 +50,18 @@ export default function BudgetsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const splitTotals = useMemo(() => splitTotalsByTransaction(splits), [splits]);
+  const excludedIds = useMemo(() => excludedAccountIds(accounts), [accounts]);
+
   const spentByCategory = useMemo(() => {
     const map: Record<string, number> = {};
     for (const t of txs) {
+      if (excludedIds.has(t.account_id)) continue;
       if (!t.category_id) continue;
-      map[t.category_id] = (map[t.category_id] || 0) + Number(t.amount);
+      map[t.category_id] = (map[t.category_id] || 0) + netAmount(t, splitTotals);
     }
     return map;
-  }, [txs]);
+  }, [txs, splitTotals, excludedIds]);
 
   const withBudget = categories.filter((c) => budgets.some((b) => b.category_id === c.id));
   const withoutBudget = categories.filter((c) => !budgets.some((b) => b.category_id === c.id));

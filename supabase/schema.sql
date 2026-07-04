@@ -47,6 +47,7 @@ create table if not exists accounts (
   color text not null default '#0A84FF',
   initial_balance numeric(14,2) not null default 0,
   is_archived boolean not null default false,
+  include_in_stats boolean not null default true,
   sort_order int not null default 0,
   created_at timestamptz not null default now()
 );
@@ -122,13 +123,14 @@ alter table day_notes enable row level security;
 create policy "day_notes_all_own" on day_notes
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- ---------- RECURRING RULES (automatikus levonások / bevételek) ----------
+-- ---------- RECURRING RULES (automatikus levonások / bevételek / átvezetések) ----------
 create table if not exists recurring_rules (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   account_id uuid not null references accounts(id) on delete cascade,
+  to_account_id uuid references accounts(id) on delete set null, -- csak transfer esetén
   category_id uuid references categories(id) on delete set null,
-  type text not null default 'expense', -- expense | income
+  type text not null default 'expense', -- expense | income | transfer
   amount numeric(14,2) not null,
   currency text not null default 'HUF',
   name text not null,
@@ -146,6 +148,80 @@ alter table recurring_rules enable row level security;
 create policy "recurring_all_own" on recurring_rules
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+-- ---------- LOANS (áruhitel automatikus törlesztéssel) ----------
+create table if not exists loans (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  account_id uuid not null references accounts(id) on delete cascade,
+  category_id uuid references categories(id) on delete set null,
+  name text not null,
+  principal numeric(14,2) not null,
+  remaining_balance numeric(14,2) not null,
+  monthly_payment numeric(14,2) not null,
+  next_run_date date not null,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+alter table loans enable row level security;
+
+create policy "loans_all_own" on loans
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ---------- GOALS (megtakarítási célok) ----------
+create table if not exists goals (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  account_id uuid references accounts(id) on delete set null,
+  name text not null,
+  target_amount numeric(14,2) not null,
+  icon text not null default 'piggy-bank',
+  color text not null default '#2FD6A8',
+  is_archived boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+alter table goals enable row level security;
+
+create policy "goals_all_own" on goals
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ---------- PEOPLE (akikkel megosztod a költéseket) ----------
+create table if not exists people (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  color text not null default '#7C6AE0',
+  is_archived boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+alter table people enable row level security;
+
+create policy "people_all_own" on people
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ---------- TRANSACTION_SPLITS (mennyi jut egy tranzakcióból egy adott személyre) ----------
+create table if not exists transaction_splits (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  transaction_id uuid not null references transactions(id) on delete cascade,
+  person_id uuid not null references people(id) on delete cascade,
+  amount numeric(14,2) not null,
+  settled_amount numeric(14,2) not null default 0,
+  settled_at timestamptz,
+  note text,
+  created_at timestamptz not null default now()
+);
+
+alter table transaction_splits enable row level security;
+
+create policy "transaction_splits_all_own" on transaction_splits
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_transaction_splits_transaction on transaction_splits(transaction_id);
+create index if not exists idx_transaction_splits_person on transaction_splits(person_id);
+
 -- ---------- BUDGETS (havi büdzsé kategóriánként) ----------
 create table if not exists budgets (
   id uuid primary key default gen_random_uuid(),
@@ -162,6 +238,121 @@ alter table budgets enable row level security;
 
 create policy "budgets_all_own" on budgets
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ---------- PROFILES bővítés: alapértelmezett megosztási partner + árváltozás-figyelmeztetés ----------
+alter table profiles add column if not exists default_split_person_id uuid references people(id) on delete set null;
+alter table profiles add column if not exists warn_on_price_change boolean not null default true;
+
+-- ---------- STORES (Lidl, Aldi, Tesco, stb.) ----------
+create table if not exists stores (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  icon text not null default 'shopping-cart',
+  color text not null default '#64748B',
+  is_archived boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+alter table stores enable row level security;
+
+create policy "stores_all_own" on stores
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ---------- RECEIPTS (blokkok) ----------
+create table if not exists receipts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  transaction_id uuid references transactions(id) on delete cascade,
+  store_id uuid references stores(id) on delete set null,
+  image_path text,
+  pdf_path text,
+  link_url text,
+  occurred_on date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+alter table receipts enable row level security;
+
+create policy "receipts_all_own" on receipts
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_receipts_transaction on receipts(transaction_id);
+
+-- ---------- RECEIPT_ITEMS (blokk-tételek) ----------
+create table if not exists receipt_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  receipt_id uuid not null references receipts(id) on delete cascade,
+  raw_name text not null,
+  display_name text,
+  item_key text not null,
+  category_id uuid references categories(id) on delete set null,
+  quantity numeric(10,3) not null default 1,
+  unit_price numeric(14,2),
+  total_price numeric(14,2) not null,
+  created_at timestamptz not null default now()
+);
+
+alter table receipt_items enable row level security;
+
+create policy "receipt_items_all_own" on receipt_items
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_receipt_items_receipt on receipt_items(receipt_id);
+create index if not exists idx_receipt_items_item_key on receipt_items(user_id, item_key);
+
+-- ---------- RECEIPT_ITEM_SPLITS (tétel-szintű megosztás személyekkel) ----------
+create table if not exists receipt_item_splits (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  receipt_item_id uuid not null references receipt_items(id) on delete cascade,
+  person_id uuid not null references people(id) on delete cascade,
+  amount numeric(14,2) not null,
+  settled_amount numeric(14,2) not null default 0,
+  settled_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table receipt_item_splits enable row level security;
+
+create policy "receipt_item_splits_all_own" on receipt_item_splits
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_receipt_item_splits_item on receipt_item_splits(receipt_item_id);
+create index if not exists idx_receipt_item_splits_person on receipt_item_splits(person_id);
+
+-- ---------- ITEM_RULES (ismert tétel -> alapértelmezett kategória/személy/megosztás) ----------
+create table if not exists item_rules (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  item_key text not null,
+  category_id uuid references categories(id) on delete set null,
+  default_person_id uuid references people(id) on delete set null,
+  default_split text not null default 'none', -- 'none' | 'half' | 'full'
+  created_at timestamptz not null default now(),
+  unique (user_id, item_key)
+);
+
+alter table item_rules enable row level security;
+
+create policy "item_rules_all_own" on item_rules
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ---------- STORAGE: "receipts" bucket a blokk-képekhez/PDF-ekhez ----------
+-- Az objektum elérési útnak `${user_id}/...` prefixűnek kell lennie, ezt a kliens kód biztosítja.
+insert into storage.buckets (id, name, public)
+values ('receipts', 'receipts', false)
+on conflict (id) do nothing;
+
+create policy "receipts_storage_select_own" on storage.objects
+  for select using (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "receipts_storage_insert_own" on storage.objects
+  for insert with check (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "receipts_storage_update_own" on storage.objects
+  for update using (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "receipts_storage_delete_own" on storage.objects
+  for delete using (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
 
 -- =====================================================================
 -- ALAP KATEGÓRIÁK FELTÖLTÉSE (globálisak, minden usernek látszanak)

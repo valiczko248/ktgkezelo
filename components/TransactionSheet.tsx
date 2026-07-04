@@ -2,12 +2,38 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { Account, Category, Transaction, TxType } from "@/lib/types";
-import { Icon, X, Check } from "./Icon";
+import type {
+  Account,
+  Category,
+  ItemRule,
+  Person,
+  ReceiptItem,
+  Store,
+  Transaction,
+  TransactionSplit,
+  TxType,
+} from "@/lib/types";
+import { Icon, X, Check, Plus, Trash2 } from "./Icon";
+import { ReceiptSheet, emptyReceiptDraft, type ReceiptDraft } from "./ReceiptSheet";
+import { normalizeItemKey } from "@/lib/items";
+import { dataUrlToBlob } from "@/lib/imageStitch";
+import { formatShortMoney } from "@/lib/format";
+
+interface SplitRow {
+  person_id: string;
+  amount: string;
+}
 
 export function TransactionSheet({
   accounts,
   categories,
+  people,
+  stores,
+  itemRules,
+  priorReceiptItems,
+  defaultSplitPersonId,
+  warnOnPriceChange,
+  onCreateStore,
   editing,
   defaultDate,
   onClose,
@@ -15,6 +41,13 @@ export function TransactionSheet({
 }: {
   accounts: Account[];
   categories: Category[];
+  people: Person[];
+  stores: Store[];
+  itemRules: ItemRule[];
+  priorReceiptItems: ReceiptItem[];
+  defaultSplitPersonId: string | null;
+  warnOnPriceChange: boolean;
+  onCreateStore: (name: string) => Promise<Store | null>;
   editing?: Transaction | null;
   defaultDate?: string;
   onClose: () => void;
@@ -28,16 +61,86 @@ export function TransactionSheet({
   const [categoryId, setCategoryId] = useState(editing?.category_id || "");
   const [date, setDate] = useState(editing?.occurred_on || defaultDate || new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState(editing?.note || "");
+  const [splitRows, setSplitRows] = useState<SplitRow[]>([]);
+  const [receiptDraft, setReceiptDraft] = useState<ReceiptDraft | null>(null);
+  const [receiptSheetOpen, setReceiptSheetOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const account = accounts.find((a) => a.id === accountId);
   const currency = account?.currency || "HUF";
   const visibleCategories = categories.filter((c) => c.kind === (type === "income" ? "income" : "expense"));
+  const hasReceiptItems = !!receiptDraft && receiptDraft.items.length > 0;
+  const receiptSplitTotal = receiptDraft
+    ? receiptDraft.items.reduce((s, it) => s + it.splitRows.reduce((s2, r) => s2 + (Number(r.amount) || 0), 0), 0)
+    : 0;
+  const splitTotal = splitRows.reduce((s, r) => s + (Number(r.amount) || 0), 0) + receiptSplitTotal;
+  const ownShare = (Number(amount) || 0) - splitTotal;
 
   useEffect(() => {
     if (!categoryId && visibleCategories.length > 0) setCategoryId(visibleCategories[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type]);
+
+  useEffect(() => {
+    if (!editing) return;
+    (async () => {
+      const { data } = await supabase.from("transaction_splits").select("*").eq("transaction_id", editing.id);
+      setSplitRows(
+        ((data as TransactionSplit[]) || []).map((s) => ({ person_id: s.person_id, amount: String(s.amount) }))
+      );
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing?.id]);
+
+  useEffect(() => {
+    if (!editing) return;
+    (async () => {
+      const { data: receipt } = await supabase
+        .from("receipts")
+        .select("*")
+        .eq("transaction_id", editing.id)
+        .maybeSingle();
+      if (!receipt) return;
+      const { data: items } = await supabase.from("receipt_items").select("*").eq("receipt_id", receipt.id);
+      const itemIds = (items || []).map((i) => i.id);
+      const { data: itemSplits } =
+        itemIds.length > 0
+          ? await supabase.from("receipt_item_splits").select("*").in("receipt_item_id", itemIds)
+          : { data: [] as { receipt_item_id: string; person_id: string; amount: number }[] };
+      setReceiptDraft({
+        storeId: receipt.store_id || "",
+        imageDataUrl: null,
+        pdfFile: null,
+        linkUrl: receipt.link_url || "",
+        existingImagePath: receipt.image_path,
+        existingPdfPath: receipt.pdf_path,
+        items: (items || []).map((it) => ({
+          raw_name: it.raw_name,
+          display_name: it.display_name || "",
+          category_id: it.category_id || "",
+          quantity: String(it.quantity),
+          total_price: String(it.total_price),
+          splitRows: (itemSplits || [])
+            .filter((s) => s.receipt_item_id === it.id)
+            .map((s) => ({ person_id: s.person_id, amount: String(s.amount) })),
+          saveAsRule: false,
+          priceWarning: null,
+        })),
+      });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing?.id]);
+
+  function addSplitRow() {
+    if (people.length === 0) return;
+    setSplitRows((rows) => [...rows, { person_id: people[0].id, amount: "" }]);
+  }
+  function updateSplitRow(index: number, patch: Partial<SplitRow>) {
+    setSplitRows((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+  function removeSplitRow(index: number) {
+    setSplitRows((rows) => rows.filter((_, i) => i !== index));
+  }
 
   async function handleSave() {
     if (!amount || Number(amount) <= 0 || !accountId) return;
@@ -61,10 +164,120 @@ export function TransactionSheet({
       note: note || null,
     };
 
+    let transactionId = editing?.id;
     if (editing) {
       await supabase.from("transactions").update(payload).eq("id", editing.id);
     } else {
-      await supabase.from("transactions").insert(payload);
+      const { data } = await supabase.from("transactions").insert(payload).select().single();
+      transactionId = data?.id;
+    }
+
+    if (transactionId) {
+      await supabase.from("transaction_splits").delete().eq("transaction_id", transactionId);
+      const validRows = type === "expense" ? splitRows.filter((r) => r.person_id && Number(r.amount) > 0) : [];
+      if (validRows.length > 0) {
+        await supabase.from("transaction_splits").insert(
+          validRows.map((r) => ({
+            user_id: user.id,
+            transaction_id: transactionId,
+            person_id: r.person_id,
+            amount: Number(r.amount),
+          }))
+        );
+      }
+
+      await supabase.from("receipts").delete().eq("transaction_id", transactionId);
+
+      if (type === "expense" && receiptDraft) {
+        let imagePath = receiptDraft.existingImagePath || null;
+        if (receiptDraft.imageDataUrl) {
+          const blob = await dataUrlToBlob(receiptDraft.imageDataUrl);
+          const path = `${user.id}/${transactionId}-${Date.now()}.png`;
+          const { error } = await supabase.storage
+            .from("receipts")
+            .upload(path, blob, { contentType: "image/png", upsert: true });
+          if (!error) imagePath = path;
+        }
+        let pdfPath = receiptDraft.existingPdfPath || null;
+        if (receiptDraft.pdfFile) {
+          const path = `${user.id}/${transactionId}-${Date.now()}.pdf`;
+          const { error } = await supabase.storage
+            .from("receipts")
+            .upload(path, receiptDraft.pdfFile, { contentType: "application/pdf", upsert: true });
+          if (!error) pdfPath = path;
+        }
+
+        const shouldCreateReceipt =
+          receiptDraft.items.length > 0 || imagePath || pdfPath || receiptDraft.linkUrl || receiptDraft.storeId;
+
+        if (shouldCreateReceipt) {
+          const { data: receiptRow } = await supabase
+            .from("receipts")
+            .insert({
+              user_id: user.id,
+              transaction_id: transactionId,
+              store_id: receiptDraft.storeId || null,
+              image_path: imagePath,
+              pdf_path: pdfPath,
+              link_url: receiptDraft.linkUrl || null,
+              occurred_on: date,
+            })
+            .select()
+            .single();
+
+          if (receiptRow && receiptDraft.items.length > 0) {
+            const itemsPayload = receiptDraft.items.map((it) => ({
+              user_id: user.id,
+              receipt_id: receiptRow.id,
+              raw_name: it.raw_name || it.display_name || "Tétel",
+              display_name: it.display_name || null,
+              item_key: normalizeItemKey(it.raw_name || it.display_name || ""),
+              category_id: it.category_id || null,
+              quantity: Number(it.quantity) || 1,
+              unit_price: Number(it.quantity) > 0 ? Number(it.total_price) / Number(it.quantity) : null,
+              total_price: Number(it.total_price) || 0,
+            }));
+            const { data: insertedItems } = await supabase.from("receipt_items").insert(itemsPayload).select();
+
+            if (insertedItems) {
+              for (let i = 0; i < insertedItems.length; i++) {
+                const draftItem = receiptDraft.items[i];
+                const insertedItem = insertedItems[i];
+                const validSplits = draftItem.splitRows.filter((r) => r.person_id && Number(r.amount) > 0);
+                if (validSplits.length > 0) {
+                  await supabase.from("receipt_item_splits").insert(
+                    validSplits.map((r) => ({
+                      user_id: user.id,
+                      receipt_item_id: insertedItem.id,
+                      person_id: r.person_id,
+                      amount: Number(r.amount),
+                    }))
+                  );
+                }
+                if (draftItem.saveAsRule && insertedItem.item_key) {
+                  const defaultPersonId = validSplits[0]?.person_id || null;
+                  const defaultSplit =
+                    validSplits.length === 0
+                      ? "none"
+                      : Math.abs(Number(validSplits[0].amount) - Number(draftItem.total_price)) < 1
+                      ? "full"
+                      : "half";
+                  await supabase.from("item_rules").upsert(
+                    {
+                      user_id: user.id,
+                      item_key: insertedItem.item_key,
+                      category_id: draftItem.category_id || null,
+                      default_person_id: defaultPersonId,
+                      default_split: defaultSplit,
+                    },
+                    { onConflict: "user_id,item_key" }
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     setSaving(false);
@@ -193,6 +406,115 @@ export function TransactionSheet({
           </div>
         )}
 
+        {/* Blokk csatolása */}
+        {type === "expense" && (
+          <div className="mb-4">
+            <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Blokk</label>
+            {receiptDraft ? (
+              <div className="glass rounded-2xl p-3 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-signal/10 flex items-center justify-center shrink-0">
+                  <Icon name="receipt" className="w-4.5 h-4.5 text-signal" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">
+                    {stores.find((s) => s.id === receiptDraft.storeId)?.name || "Blokk csatolva"}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {receiptDraft.items.length} tétel
+                    {receiptDraft.items.length > 0 &&
+                      ` · ${formatShortMoney(
+                        receiptDraft.items.reduce((s, it) => s + (Number(it.total_price) || 0), 0),
+                        currency
+                      )}`}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setReceiptSheetOpen(true)}
+                  className="text-xs font-medium text-signal shrink-0"
+                >
+                  Szerkesztés
+                </button>
+                <button
+                  onClick={() => setReceiptDraft(null)}
+                  className="w-8 h-8 shrink-0 rounded-full bg-coral/10 text-coral flex items-center justify-center"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setReceiptSheetOpen(true)}
+                className="w-full py-2.5 rounded-2xl border border-dashed border-slate-400/40 text-sm text-slate-500 flex items-center justify-center gap-1.5"
+              >
+                <Icon name="receipt" className="w-4 h-4" /> Blokk csatolása
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Splits */}
+        {type === "expense" && !hasReceiptItems && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Megosztás</label>
+              {people.length > 0 && (
+                <button
+                  onClick={addSplitRow}
+                  className="text-xs font-medium text-signal flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" /> Személy
+                </button>
+              )}
+            </div>
+            {people.length === 0 && splitRows.length === 0 ? (
+              <p className="text-xs text-slate-400">Nincs még személy felvéve a Beállítások &gt; Személyek alatt.</p>
+            ) : (
+              <div className="space-y-2">
+                {splitRows.map((row, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <select
+                      value={row.person_id}
+                      onChange={(e) => updateSplitRow(i, { person_id: e.target.value })}
+                      className="flex-1 px-3 py-2 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm"
+                    >
+                      {people.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      placeholder="0"
+                      value={row.amount}
+                      onChange={(e) => updateSplitRow(i, { amount: e.target.value })}
+                      className="w-24 px-3 py-2 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm font-mono tabular"
+                    />
+                    <button
+                      onClick={() => removeSplitRow(i)}
+                      className="w-8 h-8 shrink-0 rounded-full bg-coral/10 text-coral flex items-center justify-center"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {splitRows.length > 0 && (
+              <p className={`text-xs mt-2 ${ownShare < 0 ? "text-coral" : "text-slate-400"}`}>
+                Saját részed: {ownShare.toLocaleString("hu-HU")} {currency}
+              </p>
+            )}
+          </div>
+        )}
+
+        {type === "expense" && hasReceiptItems && (
+          <p className={`text-xs mb-4 -mt-2 ${ownShare < 0 ? "text-coral" : "text-slate-400"}`}>
+            A megosztás a blokk tételeinél van beállítva. Saját részed: {ownShare.toLocaleString("hu-HU")} {currency}
+          </p>
+        )}
+
         {/* Date */}
         <div className="mb-4">
           <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Dátum</label>
@@ -236,6 +558,25 @@ export function TransactionSheet({
           </button>
         </div>
       </div>
+
+      {receiptSheetOpen && (
+        <ReceiptSheet
+          stores={stores}
+          people={people}
+          categories={categories}
+          itemRules={itemRules}
+          priorItems={priorReceiptItems}
+          defaultSplitPersonId={defaultSplitPersonId}
+          warnOnPriceChange={warnOnPriceChange}
+          initialDraft={receiptDraft || emptyReceiptDraft()}
+          onClose={() => setReceiptSheetOpen(false)}
+          onCreateStore={onCreateStore}
+          onSave={(draft) => {
+            setReceiptDraft(draft);
+            setReceiptSheetOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
