@@ -357,6 +357,11 @@ create policy "receipts_storage_delete_own" on storage.objects
 -- =====================================================================
 -- ALAP KATEGÓRIÁK FELTÖLTÉSE (globálisak, minden usernek látszanak)
 -- =====================================================================
+-- Egyedi index, hogy a script többször is biztonságosan lefuttatható legyen
+-- anélkül, hogy duplikálná az alap kategóriákat.
+create unique index if not exists idx_categories_default_unique
+  on categories (name, kind) where user_id is null;
+
 insert into categories (user_id, name, kind, icon, color, is_default, sort_order) values
   (null, 'Élelmiszer', 'expense', 'shopping-cart', '#2FD6A8', true, 1),
   (null, 'Vendéglátás', 'expense', 'utensils', '#FFB020', true, 2),
@@ -374,4 +379,4 @@ insert into categories (user_id, name, kind, icon, color, is_default, sort_order
   (null, 'Vállalkozás', 'income', 'briefcase', '#2FD6A8', true, 14),
   (null, 'Ajándék', 'income', 'gift', '#2FD6A8', true, 15),
   (null, 'Egyéb bevétel', 'income', 'plus-circle', '#2FD6A8', true, 16)
-on conflict do nothing;
+on conflict (name, kind) where user_id is null do nothing;
