@@ -14,10 +14,13 @@ create table if not exists profiles (
 
 alter table profiles enable row level security;
 
+drop policy if exists "profiles_select_own" on profiles;
 create policy "profiles_select_own" on profiles
   for select using (auth.uid() = id);
+drop policy if exists "profiles_insert_own" on profiles;
 create policy "profiles_insert_own" on profiles
   for insert with check (auth.uid() = id);
+drop policy if exists "profiles_update_own" on profiles;
 create policy "profiles_update_own" on profiles
   for update using (auth.uid() = id);
 
@@ -54,6 +57,7 @@ create table if not exists accounts (
 
 alter table accounts enable row level security;
 
+drop policy if exists "accounts_all_own" on accounts;
 create policy "accounts_all_own" on accounts
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -74,12 +78,16 @@ create table if not exists categories (
 alter table categories enable row level security;
 
 -- Bárki (bejelentkezett user) látja a saját + a globális alap kategóriákat
+drop policy if exists "categories_select" on categories;
 create policy "categories_select" on categories
   for select using (user_id is null or auth.uid() = user_id);
+drop policy if exists "categories_insert_own" on categories;
 create policy "categories_insert_own" on categories
   for insert with check (auth.uid() = user_id);
+drop policy if exists "categories_update_own" on categories;
 create policy "categories_update_own" on categories
   for update using (auth.uid() = user_id);
+drop policy if exists "categories_delete_own" on categories;
 create policy "categories_delete_own" on categories
   for delete using (auth.uid() = user_id);
 
@@ -101,6 +109,7 @@ create table if not exists transactions (
 
 alter table transactions enable row level security;
 
+drop policy if exists "transactions_all_own" on transactions;
 create policy "transactions_all_own" on transactions
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -120,6 +129,7 @@ create table if not exists day_notes (
 
 alter table day_notes enable row level security;
 
+drop policy if exists "day_notes_all_own" on day_notes;
 create policy "day_notes_all_own" on day_notes
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -145,6 +155,7 @@ create table if not exists recurring_rules (
 
 alter table recurring_rules enable row level security;
 
+drop policy if exists "recurring_all_own" on recurring_rules;
 create policy "recurring_all_own" on recurring_rules
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -165,6 +176,7 @@ create table if not exists loans (
 
 alter table loans enable row level security;
 
+drop policy if exists "loans_all_own" on loans;
 create policy "loans_all_own" on loans
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -183,6 +195,7 @@ create table if not exists goals (
 
 alter table goals enable row level security;
 
+drop policy if exists "goals_all_own" on goals;
 create policy "goals_all_own" on goals
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -198,6 +211,7 @@ create table if not exists people (
 
 alter table people enable row level security;
 
+drop policy if exists "people_all_own" on people;
 create policy "people_all_own" on people
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -216,6 +230,7 @@ create table if not exists transaction_splits (
 
 alter table transaction_splits enable row level security;
 
+drop policy if exists "transaction_splits_all_own" on transaction_splits;
 create policy "transaction_splits_all_own" on transaction_splits
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -236,6 +251,7 @@ create table if not exists budgets (
 
 alter table budgets enable row level security;
 
+drop policy if exists "budgets_all_own" on budgets;
 create policy "budgets_all_own" on budgets
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -256,6 +272,7 @@ create table if not exists stores (
 
 alter table stores enable row level security;
 
+drop policy if exists "stores_all_own" on stores;
 create policy "stores_all_own" on stores
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -274,6 +291,7 @@ create table if not exists receipts (
 
 alter table receipts enable row level security;
 
+drop policy if exists "receipts_all_own" on receipts;
 create policy "receipts_all_own" on receipts
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -296,6 +314,7 @@ create table if not exists receipt_items (
 
 alter table receipt_items enable row level security;
 
+drop policy if exists "receipt_items_all_own" on receipt_items;
 create policy "receipt_items_all_own" on receipt_items
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -316,6 +335,7 @@ create table if not exists receipt_item_splits (
 
 alter table receipt_item_splits enable row level security;
 
+drop policy if exists "receipt_item_splits_all_own" on receipt_item_splits;
 create policy "receipt_item_splits_all_own" on receipt_item_splits
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -336,6 +356,7 @@ create table if not exists item_rules (
 
 alter table item_rules enable row level security;
 
+drop policy if exists "item_rules_all_own" on item_rules;
 create policy "item_rules_all_own" on item_rules
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -345,12 +366,16 @@ insert into storage.buckets (id, name, public)
 values ('receipts', 'receipts', false)
 on conflict (id) do nothing;
 
+drop policy if exists "receipts_storage_select_own" on storage.objects;
 create policy "receipts_storage_select_own" on storage.objects
   for select using (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "receipts_storage_insert_own" on storage.objects;
 create policy "receipts_storage_insert_own" on storage.objects
   for insert with check (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "receipts_storage_update_own" on storage.objects;
 create policy "receipts_storage_update_own" on storage.objects
   for update using (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "receipts_storage_delete_own" on storage.objects;
 create policy "receipts_storage_delete_own" on storage.objects
   for delete using (bucket_id = 'receipts' and (storage.foldername(name))[1] = auth.uid()::text);
 
