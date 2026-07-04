@@ -116,13 +116,13 @@ export default function SettingsPage() {
             Figyelmeztetés árváltozásnál
           </span>
           <span
-            className={`w-10 h-6 rounded-full relative transition-colors ${
+            className={`w-10 h-6 shrink-0 rounded-full relative transition-colors ${
               profile?.warn_on_price_change ? "bg-signal" : "bg-slate-500/20"
             }`}
           >
             <span
-              className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                profile?.warn_on_price_change ? "translate-x-[18px]" : "translate-x-0.5"
+              className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                profile?.warn_on_price_change ? "translate-x-4" : "translate-x-0"
               }`}
             />
           </span>

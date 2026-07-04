@@ -7,6 +7,7 @@ import type { Account, Category, Loan } from "@/lib/types";
 import { BottomNav } from "@/components/BottomNav";
 import { Icon, Plus, X, ChevronLeft, Trash2 } from "@/components/Icon";
 import { ProgressRing } from "@/components/ProgressRing";
+import { AmountInput } from "@/components/AmountInput";
 import { formatMoney } from "@/lib/format";
 import { processDueLoans } from "@/lib/automations";
 
@@ -202,27 +203,24 @@ function LoanForm({
         />
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Teljes hitelösszeg</label>
-        <input
-          type="number"
+        <AmountInput
           value={principal}
-          onChange={(e) => setPrincipal(e.target.value)}
+          onChange={setPrincipal}
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Fennmaradó összeg</label>
-        <input
-          type="number"
+        <AmountInput
           value={remaining}
-          onChange={(e) => setRemaining(e.target.value)}
+          onChange={setRemaining}
           placeholder="Ha üres, a teljes összeg"
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Havi törlesztő</label>
-        <input
-          type="number"
+        <AmountInput
           value={monthlyPayment}
-          onChange={(e) => setMonthlyPayment(e.target.value)}
+          onChange={setMonthlyPayment}
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
 

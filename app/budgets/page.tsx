@@ -7,6 +7,7 @@ import type { Account, Budget, Category, Transaction, TransactionSplit } from "@
 import { BottomNav } from "@/components/BottomNav";
 import { Icon, ChevronLeft, X } from "@/components/Icon";
 import { ProgressRing } from "@/components/ProgressRing";
+import { AmountInput } from "@/components/AmountInput";
 import { formatShortMoney } from "@/lib/format";
 import { netAmount, splitTotalsByTransaction } from "@/lib/splits";
 import { excludedAccountIds } from "@/lib/accounts";
@@ -190,10 +191,9 @@ function BudgetForm({
           </button>
         </div>
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Havi limit</label>
-        <input
-          type="number"
+        <AmountInput
           value={amount}
-          onChange={(e) => setAmount(e.target.value)}
+          onChange={setAmount}
           placeholder="0 = nincs limit"
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-5 font-mono tabular"
         />

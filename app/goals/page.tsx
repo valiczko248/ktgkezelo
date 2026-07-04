@@ -7,6 +7,7 @@ import type { Account, Goal, Transaction } from "@/lib/types";
 import { BottomNav } from "@/components/BottomNav";
 import { Icon, Plus, X, ChevronLeft, Trash2 } from "@/components/Icon";
 import { ProgressRing } from "@/components/ProgressRing";
+import { AmountInput } from "@/components/AmountInput";
 import { formatMoney } from "@/lib/format";
 
 const COLORS = ["#0A84FF", "#2FD6A8", "#FF6B6B", "#FFB020", "#7C6AE0", "#64748B"];
@@ -188,10 +189,9 @@ function GoalForm({
         />
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Cél összeg</label>
-        <input
-          type="number"
+        <AmountInput
           value={targetAmount}
-          onChange={(e) => setTargetAmount(e.target.value)}
+          onChange={setTargetAmount}
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
 

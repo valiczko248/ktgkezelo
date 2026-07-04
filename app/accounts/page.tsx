@@ -7,6 +7,7 @@ import type { Account, AccountType, Transaction } from "@/lib/types";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Icon, Plus, X, ChevronLeft } from "@/components/Icon";
+import { AmountInput } from "@/components/AmountInput";
 import { formatMoney, CURRENCIES } from "@/lib/format";
 
 const TYPES: { value: AccountType; label: string; icon: string }[] = [
@@ -145,10 +146,12 @@ function AccountForm({
   const [initial, setInitial] = useState(account ? String(account.initial_balance) : "0");
   const [includeInStats, setIncludeInStats] = useState(account?.include_in_stats ?? true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function save() {
     if (!name.trim()) return;
     setSaving(true);
+    setError(null);
     const icon = TYPES.find((t) => t.value === type)?.icon || "wallet";
     const payload = {
       name,
@@ -159,15 +162,22 @@ function AccountForm({
       initial_balance: Number(initial) || 0,
       include_in_stats: includeInStats,
     };
+    let dbError = null;
     if (account) {
-      await supabase.from("accounts").update(payload).eq("id", account.id);
+      ({ error: dbError } = await supabase.from("accounts").update(payload).eq("id", account.id));
     } else {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (user) await supabase.from("accounts").insert({ ...payload, user_id: user.id });
+      if (user) {
+        ({ error: dbError } = await supabase.from("accounts").insert({ ...payload, user_id: user.id }));
+      }
     }
     setSaving(false);
+    if (dbError) {
+      setError(dbError.message);
+      return;
+    }
     onSaved();
   }
 
@@ -233,10 +243,9 @@ function AccountForm({
         </div>
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Kezdő egyenleg</label>
-        <input
-          type="number"
+        <AmountInput
           value={initial}
-          onChange={(e) => setInitial(e.target.value)}
+          onChange={setInitial}
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
 
@@ -246,17 +255,19 @@ function AccountForm({
         >
           <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Számítson a statisztikákba</span>
           <span
-            className={`w-10 h-6 rounded-full relative transition-colors ${
+            className={`w-10 h-6 shrink-0 rounded-full relative transition-colors ${
               includeInStats ? "bg-signal" : "bg-slate-500/20"
             }`}
           >
             <span
-              className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                includeInStats ? "translate-x-[18px]" : "translate-x-0.5"
+              className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                includeInStats ? "translate-x-4" : "translate-x-0"
               }`}
             />
           </span>
         </button>
+
+        {error && <p className="text-xs text-coral mb-4">{error}</p>}
 
         <div className="flex gap-2">
           {onArchive && (

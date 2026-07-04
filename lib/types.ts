@@ -167,6 +167,7 @@ export interface ItemRule {
   id: string;
   user_id: string;
   item_key: string;
+  display_name: string | null;
   category_id: string | null;
   default_person_id: string | null;
   default_split: DefaultSplitMode;

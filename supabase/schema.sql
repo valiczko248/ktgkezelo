@@ -56,6 +56,9 @@ create table if not exists accounts (
 );
 
 alter table accounts enable row level security;
+-- Ha az accounts tábla már korábban létrejött (a "create table if not exists" ilyenkor nem
+-- csinál semmit), ez az ALTER pótolja az új oszlopot a meglévő táblán is.
+alter table accounts add column if not exists include_in_stats boolean not null default true;
 
 drop policy if exists "accounts_all_own" on accounts;
 create policy "accounts_all_own" on accounts
@@ -154,6 +157,8 @@ create table if not exists recurring_rules (
 );
 
 alter table recurring_rules enable row level security;
+-- Pótlás, ha a tábla már korábban létrejött, mielőtt az átvezetés-típus bekerült volna.
+alter table recurring_rules add column if not exists to_account_id uuid references accounts(id) on delete set null;
 
 drop policy if exists "recurring_all_own" on recurring_rules;
 create policy "recurring_all_own" on recurring_rules
@@ -342,11 +347,12 @@ create policy "receipt_item_splits_all_own" on receipt_item_splits
 create index if not exists idx_receipt_item_splits_item on receipt_item_splits(receipt_item_id);
 create index if not exists idx_receipt_item_splits_person on receipt_item_splits(person_id);
 
--- ---------- ITEM_RULES (ismert tétel -> alapértelmezett kategória/személy/megosztás) ----------
+-- ---------- ITEM_RULES (ismert tétel -> alapértelmezett kategória/személy/megosztás/saját név) ----------
 create table if not exists item_rules (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   item_key text not null,
+  display_name text,
   category_id uuid references categories(id) on delete set null,
   default_person_id uuid references people(id) on delete set null,
   default_split text not null default 'none', -- 'none' | 'half' | 'full'
@@ -355,6 +361,8 @@ create table if not exists item_rules (
 );
 
 alter table item_rules enable row level security;
+-- Pótlás, ha az item_rules tábla már korábban létrejött, mielőtt a saját név mező bekerült volna.
+alter table item_rules add column if not exists display_name text;
 
 drop policy if exists "item_rules_all_own" on item_rules;
 create policy "item_rules_all_own" on item_rules

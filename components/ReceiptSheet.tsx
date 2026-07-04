@@ -5,60 +5,14 @@ import type { Category, ItemRule, Person, ReceiptItem, Store } from "@/lib/types
 import { normalizeItemKey } from "@/lib/items";
 import { parseReceiptLines, recognizeReceiptText } from "@/lib/ocr";
 import { fileToDataUrl, stitchImagesVertically } from "@/lib/imageStitch";
+import { type ItemDraft, type ItemSplitDraft, type ReceiptDraft, emptyItemDraft } from "@/lib/receiptDraft";
 import { Icon, X, Check, Plus, Trash2 } from "./Icon";
+import { AmountInput } from "./AmountInput";
 
-export interface ItemSplitDraft {
-  person_id: string;
-  amount: string;
-}
+export type { ItemDraft, ItemSplitDraft, ReceiptDraft } from "@/lib/receiptDraft";
+export { emptyReceiptDraft } from "@/lib/receiptDraft";
 
-export interface ItemDraft {
-  raw_name: string;
-  display_name: string;
-  category_id: string;
-  quantity: string;
-  total_price: string;
-  splitRows: ItemSplitDraft[];
-  saveAsRule: boolean;
-  priceWarning: string | null;
-}
-
-export interface ReceiptDraft {
-  storeId: string;
-  imageDataUrl: string | null;
-  pdfFile: File | null;
-  linkUrl: string;
-  items: ItemDraft[];
-  // szerkesztéskor betöltött, korábban feltöltött fájlok elérési útja — csak akkor íródik felül,
-  // ha a user új fotót/PDF-et választ
-  existingImagePath?: string | null;
-  existingPdfPath?: string | null;
-}
-
-export function emptyReceiptDraft(): ReceiptDraft {
-  return {
-    storeId: "",
-    imageDataUrl: null,
-    pdfFile: null,
-    linkUrl: "",
-    items: [],
-    existingImagePath: null,
-    existingPdfPath: null,
-  };
-}
-
-function emptyItem(): ItemDraft {
-  return {
-    raw_name: "",
-    display_name: "",
-    category_id: "",
-    quantity: "1",
-    total_price: "",
-    splitRows: [],
-    saveAsRule: false,
-    priceWarning: null,
-  };
-}
+const emptyItem = emptyItemDraft;
 
 export function ReceiptSheet({
   stores,
@@ -96,6 +50,7 @@ export function ReceiptSheet({
   const expenseCategories = categories.filter((c) => c.kind === "expense");
 
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const lastPriceByKey = useMemo(() => {
@@ -138,6 +93,7 @@ export function ReceiptSheet({
     const rule = itemRules.find((r) => r.item_key === key);
     let next = { ...item };
     if (rule) {
+      if (!next.display_name && rule.display_name) next.display_name = rule.display_name;
       if (!next.category_id && rule.category_id) next.category_id = rule.category_id;
       if (next.splitRows.length === 0 && rule.default_split !== "none" && rule.default_person_id) {
         const amount = Number(next.total_price) || 0;
@@ -298,6 +254,18 @@ export function ReceiptSheet({
                 e.target.value = "";
               }}
             />
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={async (e) => {
+                const files = Array.from(e.target.files || []);
+                for (const file of files) await addPhoto(file);
+                e.target.value = "";
+              }}
+            />
             <div className="flex gap-2 overflow-x-auto pb-1 mb-2">
               {photos.map((p, i) => (
                 <div key={i} className="relative shrink-0">
@@ -313,9 +281,17 @@ export function ReceiptSheet({
               ))}
               <button
                 onClick={() => photoInputRef.current?.click()}
-                className="shrink-0 w-16 h-20 rounded-xl border border-dashed border-slate-400/40 flex items-center justify-center text-slate-400"
+                className="shrink-0 w-16 h-20 rounded-xl border border-dashed border-slate-400/40 flex flex-col items-center justify-center gap-1 text-slate-400"
               >
                 <Icon name="camera" className="w-5 h-5" />
+                <span className="text-[10px]">Fotó</span>
+              </button>
+              <button
+                onClick={() => galleryInputRef.current?.click()}
+                className="shrink-0 w-16 h-20 rounded-xl border border-dashed border-slate-400/40 flex flex-col items-center justify-center gap-1 text-slate-400"
+              >
+                <Icon name="image" className="w-5 h-5" />
+                <span className="text-[10px]">Galéria</span>
               </button>
             </div>
             <p className="text-[11px] text-slate-400 mb-2">
@@ -387,10 +363,9 @@ export function ReceiptSheet({
                     className="w-full px-3 py-1.5 rounded-xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-xs"
                   />
                 </div>
-                <input
-                  type="number"
+                <AmountInput
                   value={item.total_price}
-                  onChange={(e) => updateItem(i, { total_price: e.target.value })}
+                  onChange={(v) => updateItem(i, { total_price: v })}
                   placeholder="Ár"
                   className="w-20 px-2 py-1.5 rounded-xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm font-mono tabular"
                 />
@@ -448,10 +423,9 @@ export function ReceiptSheet({
                           </option>
                         ))}
                       </select>
-                      <input
-                        type="number"
+                      <AmountInput
                         value={row.amount}
-                        onChange={(e) => updateSplitRow(i, si, { amount: e.target.value })}
+                        onChange={(v) => updateSplitRow(i, si, { amount: v })}
                         className="w-16 px-2 py-1.5 rounded-xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-xs font-mono tabular"
                       />
                       <button

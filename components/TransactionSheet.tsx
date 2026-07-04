@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
 import type {
   Account,
@@ -14,10 +15,14 @@ import type {
   TxType,
 } from "@/lib/types";
 import { Icon, X, Check, Plus, Trash2 } from "./Icon";
-import { ReceiptSheet, emptyReceiptDraft, type ReceiptDraft } from "./ReceiptSheet";
+import { AmountInput } from "./AmountInput";
+import { emptyReceiptDraft, type ReceiptDraft } from "@/lib/receiptDraft";
 import { normalizeItemKey } from "@/lib/items";
 import { dataUrlToBlob } from "@/lib/imageStitch";
 import { formatShortMoney } from "@/lib/format";
+
+// Külön chunkba kerül (OCR + kép-összefűzés csak akkor töltődik be, amikor tényleg megnyílik)
+const ReceiptSheet = dynamic(() => import("./ReceiptSheet").then((m) => m.ReceiptSheet), { ssr: false });
 
 interface SplitRow {
   person_id: string;
@@ -173,7 +178,15 @@ export function TransactionSheet({
     }
 
     if (transactionId) {
-      await supabase.from("transaction_splits").delete().eq("transaction_id", transactionId);
+      // Meglévő tétel szerkesztésekor a régi splitek/blokk törlendők az újrafelvitel előtt —
+      // vadonatúj tételnél ez sosem lehet szükséges, feleslegesen lassítaná a mentést.
+      if (editing) {
+        await Promise.all([
+          supabase.from("transaction_splits").delete().eq("transaction_id", transactionId),
+          supabase.from("receipts").delete().eq("transaction_id", transactionId),
+        ]);
+      }
+
       const validRows = type === "expense" ? splitRows.filter((r) => r.person_id && Number(r.amount) > 0) : [];
       if (validRows.length > 0) {
         await supabase.from("transaction_splits").insert(
@@ -185,8 +198,6 @@ export function TransactionSheet({
           }))
         );
       }
-
-      await supabase.from("receipts").delete().eq("transaction_id", transactionId);
 
       if (type === "expense" && receiptDraft) {
         let imagePath = receiptDraft.existingImagePath || null;
@@ -266,6 +277,7 @@ export function TransactionSheet({
                     {
                       user_id: user.id,
                       item_key: insertedItem.item_key,
+                      display_name: draftItem.display_name || null,
                       category_id: draftItem.category_id || null,
                       default_person_id: defaultPersonId,
                       default_split: defaultSplit,
@@ -324,12 +336,10 @@ export function TransactionSheet({
 
         {/* Amount */}
         <div className="mb-4">
-          <input
-            type="number"
-            inputMode="decimal"
+          <AmountInput
             placeholder="0"
             value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+            onChange={setAmount}
             className="w-full text-center font-mono tabular text-4xl font-semibold bg-transparent outline-none placeholder:text-slate-300 dark:placeholder:text-slate-600"
             autoFocus
           />
@@ -483,12 +493,10 @@ export function TransactionSheet({
                         </option>
                       ))}
                     </select>
-                    <input
-                      type="number"
-                      inputMode="decimal"
+                    <AmountInput
                       placeholder="0"
                       value={row.amount}
-                      onChange={(e) => updateSplitRow(i, { amount: e.target.value })}
+                      onChange={(v) => updateSplitRow(i, { amount: v })}
                       className="w-24 px-3 py-2 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm font-mono tabular"
                     />
                     <button

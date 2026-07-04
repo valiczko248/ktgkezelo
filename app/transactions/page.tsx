@@ -40,19 +40,18 @@ export default function TransactionsPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [search, setSearch] = useState("");
 
+  const [receiptMetaLoaded, setReceiptMetaLoaded] = useState(false);
+
   async function loadAll() {
     setLoading(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const [{ data: acc }, { data: cat }, { data: ppl }, { data: str }, { data: rules }, { data: ritems }, { data: prof }, { data: tx }, { data: spl }] =
+    const [{ data: acc }, { data: cat }, { data: ppl }, { data: prof }, { data: tx }, { data: spl }] =
       await Promise.all([
         supabase.from("accounts").select("*").order("sort_order"),
         supabase.from("categories").select("*").order("sort_order"),
         supabase.from("people").select("*").eq("is_archived", false).order("created_at"),
-        supabase.from("stores").select("*").eq("is_archived", false).order("created_at"),
-        supabase.from("item_rules").select("*"),
-        supabase.from("receipt_items").select("*"),
         user ? supabase.from("profiles").select("*").eq("id", user.id).single() : Promise.resolve({ data: null }),
         supabase.from("transactions").select("*").order("occurred_on", { ascending: false }),
         supabase.from("transaction_splits").select("*"),
@@ -60,13 +59,25 @@ export default function TransactionsPage() {
     setAccounts(acc || []);
     setCategories(cat || []);
     setPeople(ppl || []);
-    setStores(str || []);
-    setItemRules(rules || []);
-    setReceiptItems(ritems || []);
     setProfile(prof || null);
     setTxs(tx || []);
     setSplits(spl || []);
     setLoading(false);
+  }
+
+  // Csak akkor tölti be a blokk-csatoláshoz kellő (boltok, ismert tétel-szabályok, korábbi
+  // blokk-tételek) adatokat, amikor a user ténylegesen megnyitja a tétel-szerkesztőt —
+  // ezek a lista megjelenítéséhez nem kellenek, feleslegesen lassítanák az oldal betöltését.
+  async function loadReceiptMeta() {
+    const [{ data: str }, { data: rules }, { data: ritems }] = await Promise.all([
+      supabase.from("stores").select("*").eq("is_archived", false).order("created_at"),
+      supabase.from("item_rules").select("*"),
+      supabase.from("receipt_items").select("*"),
+    ]);
+    setStores(str || []);
+    setItemRules(rules || []);
+    setReceiptItems(ritems || []);
+    setReceiptMetaLoaded(true);
   }
 
   async function createStore(name: string): Promise<Store | null> {
@@ -83,6 +94,11 @@ export default function TransactionsPage() {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (sheetOpen && !receiptMetaLoaded) loadReceiptMeta();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheetOpen]);
 
   const filtered = useMemo(() => {
     return txs.filter((t) => {

@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { Account, Category, Frequency, RecurringRule } from "@/lib/types";
 import { BottomNav } from "@/components/BottomNav";
 import { Icon, Plus, X, ChevronLeft, Trash2 } from "@/components/Icon";
+import { AmountInput } from "@/components/AmountInput";
 import { formatMoney } from "@/lib/format";
 import { processDueRecurring } from "@/lib/automations";
 
@@ -183,6 +184,7 @@ function RuleForm({
   const [frequency, setFrequency] = useState<Frequency>(rule?.frequency || "monthly");
   const [nextRun, setNextRun] = useState(rule?.next_run_date || new Date().toISOString().slice(0, 10));
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const account = accounts.find((a) => a.id === accountId);
   const visibleCategories = categories.filter((c) => c.kind === (type === "transfer" ? "expense" : type));
@@ -191,6 +193,7 @@ function RuleForm({
     if (!name.trim() || !amount || !accountId) return;
     if (type === "transfer" && (!toAccountId || toAccountId === accountId)) return;
     setSaving(true);
+    setError(null);
     const payload = {
       name,
       type,
@@ -203,15 +206,22 @@ function RuleForm({
       next_run_date: nextRun,
       active: true,
     };
+    let dbError = null;
     if (rule) {
-      await supabase.from("recurring_rules").update(payload).eq("id", rule.id);
+      ({ error: dbError } = await supabase.from("recurring_rules").update(payload).eq("id", rule.id));
     } else {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (user) await supabase.from("recurring_rules").insert({ ...payload, user_id: user.id });
+      if (user) {
+        ({ error: dbError } = await supabase.from("recurring_rules").insert({ ...payload, user_id: user.id }));
+      }
     }
     setSaving(false);
+    if (dbError) {
+      setError(dbError.message);
+      return;
+    }
     onSaved();
   }
 
@@ -256,10 +266,9 @@ function RuleForm({
         </div>
 
         <label className="text-xs font-medium text-slate-500 mb-1.5 block">Összeg</label>
-        <input
-          type="number"
+        <AmountInput
           value={amount}
-          onChange={(e) => setAmount(e.target.value)}
+          onChange={setAmount}
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-4 font-mono tabular"
         />
 
@@ -338,6 +347,8 @@ function RuleForm({
           onChange={(e) => setNextRun(e.target.value)}
           className="w-full px-4 py-2.5 rounded-2xl bg-white/70 dark:bg-white/5 border border-white/60 dark:border-white/10 outline-none text-sm mb-5"
         />
+
+        {error && <p className="text-xs text-coral mb-4">{error}</p>}
 
         <button
           onClick={save}

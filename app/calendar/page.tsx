@@ -30,42 +30,61 @@ export default function CalendarPage() {
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
 
+  const [receiptMetaLoaded, setReceiptMetaLoaded] = useState(false);
+
   const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
   const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
 
-  async function loadAll() {
+  // Hónap-független adatok — csak egyszer, belépéskor kell betölteni, nem minden hónapváltáskor.
+  async function loadStatic() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    const [{ data: acc }, { data: cat }, { data: ppl }, { data: str }, { data: rules }, { data: ritems }, { data: prof }, { data: tx }, { data: notes }] =
-      await Promise.all([
-        supabase.from("accounts").select("*"),
-        supabase.from("categories").select("*"),
-        supabase.from("people").select("*").eq("is_archived", false).order("created_at"),
-        supabase.from("stores").select("*").eq("is_archived", false).order("created_at"),
-        supabase.from("item_rules").select("*"),
-        supabase.from("receipt_items").select("*"),
-        user ? supabase.from("profiles").select("*").eq("id", user.id).single() : Promise.resolve({ data: null }),
-        supabase
-          .from("transactions")
-          .select("*")
-          .gte("occurred_on", fmtISO(monthStart))
-          .lte("occurred_on", fmtISO(monthEnd)),
-        supabase
-          .from("day_notes")
-          .select("*")
-          .gte("the_date", fmtISO(monthStart))
-          .lte("the_date", fmtISO(monthEnd)),
-      ]);
+    const [{ data: acc }, { data: cat }, { data: ppl }, { data: prof }] = await Promise.all([
+      supabase.from("accounts").select("*"),
+      supabase.from("categories").select("*"),
+      supabase.from("people").select("*").eq("is_archived", false).order("created_at"),
+      user ? supabase.from("profiles").select("*").eq("id", user.id).single() : Promise.resolve({ data: null }),
+    ]);
     setAccounts(acc || []);
     setCategories(cat || []);
     setPeople(ppl || []);
+    setProfile(prof || null);
+  }
+
+  async function loadMonth() {
+    const [{ data: tx }, { data: notes }] = await Promise.all([
+      supabase
+        .from("transactions")
+        .select("*")
+        .gte("occurred_on", fmtISO(monthStart))
+        .lte("occurred_on", fmtISO(monthEnd)),
+      supabase
+        .from("day_notes")
+        .select("*")
+        .gte("the_date", fmtISO(monthStart))
+        .lte("the_date", fmtISO(monthEnd)),
+    ]);
+    setTxs(tx || []);
+    setDayNotes(notes || []);
+  }
+
+  async function loadAll() {
+    await Promise.all([loadStatic(), loadMonth()]);
+  }
+
+  // Csak akkor tölti be a blokk-csatoláshoz kellő adatokat, amikor a user ténylegesen
+  // megnyitja a tétel-szerkesztőt.
+  async function loadReceiptMeta() {
+    const [{ data: str }, { data: rules }, { data: ritems }] = await Promise.all([
+      supabase.from("stores").select("*").eq("is_archived", false).order("created_at"),
+      supabase.from("item_rules").select("*"),
+      supabase.from("receipt_items").select("*"),
+    ]);
     setStores(str || []);
     setItemRules(rules || []);
     setReceiptItems(ritems || []);
-    setProfile(prof || null);
-    setTxs(tx || []);
-    setDayNotes(notes || []);
+    setReceiptMetaLoaded(true);
   }
 
   async function createStore(name: string): Promise<Store | null> {
@@ -79,9 +98,19 @@ export default function CalendarPage() {
   }
 
   useEffect(() => {
-    loadAll();
+    loadStatic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    loadMonth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursor]);
+
+  useEffect(() => {
+    if (sheetOpen && !receiptMetaLoaded) loadReceiptMeta();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheetOpen]);
 
   const dayTotals = useMemo(() => {
     const map: Record<string, { expense: number; income: number; currency: string }> = {};
@@ -139,34 +168,39 @@ export default function CalendarPage() {
       <TopBar title="Naptár" />
 
       <div className="glass rounded-4xl p-4 mb-5">
-        <div className="flex items-center justify-between mb-4 px-1">
+        <div className="flex items-center justify-between mb-5 px-1">
           <button
             onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}
-            className="w-8 h-8 rounded-full flex items-center justify-center active:bg-slate-500/10"
+            className="w-9 h-9 rounded-full glass flex items-center justify-center active:scale-90 transition-transform"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <p className="font-display font-medium capitalize">
+          <p className="font-display font-semibold text-lg capitalize">
             {new Intl.DateTimeFormat("hu-HU", { month: "long", year: "numeric" }).format(cursor)}
           </p>
           <button
             onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}
-            className="w-8 h-8 rounded-full flex items-center justify-center active:bg-slate-500/10"
+            className="w-9 h-9 rounded-full glass flex items-center justify-center active:scale-90 transition-transform"
           >
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="grid grid-cols-7 gap-1 mb-1">
-          {["H", "K", "Sze", "Cs", "P", "Szo", "V"].map((d) => (
-            <div key={d} className="text-center text-[10px] font-medium text-slate-400 py-1">
+        <div className="grid grid-cols-7 gap-1.5 mb-2">
+          {["H", "K", "Sze", "Cs", "P", "Szo", "V"].map((d, idx) => (
+            <div
+              key={d}
+              className={`text-center text-[10px] font-semibold py-1 ${
+                idx >= 5 ? "text-coral/70" : "text-slate-400"
+              }`}
+            >
               {d}
             </div>
           ))}
         </div>
 
         {weeks.map((row, i) => (
-          <div key={i} className="grid grid-cols-7 gap-1 mb-1">
+          <div key={i} className="grid grid-cols-7 gap-1.5 mb-1.5">
             {row.map((date, j) => {
               if (!date) return <div key={j} />;
               const iso = fmtISO(date);
@@ -174,26 +208,29 @@ export default function CalendarPage() {
               const hasNote = dayNotes.some((n) => n.the_date === iso);
               const intensity = totals ? Math.min(1, totals.expense / maxExpense) : 0;
               const isToday = fmtISO(new Date()) === iso;
+              const isWeekend = j >= 5;
               return (
                 <button
                   key={j}
                   onClick={() => setSelectedDate(iso)}
-                  className={`relative aspect-square rounded-xl flex flex-col items-center justify-center transition-all ${
-                    isToday ? "ring-1 ring-signal" : ""
+                  className={`relative aspect-square rounded-2xl flex flex-col items-center justify-center gap-0.5 transition-all active:scale-90 ${
+                    isToday ? "ring-2 ring-signal shadow-glow-signal" : ""
                   }`}
                   style={{
                     backgroundColor: totals?.expense
-                      ? `rgba(255, 107, 107, ${0.08 + intensity * 0.32})`
+                      ? `rgba(255, 107, 107, ${0.1 + intensity * 0.35})`
+                      : isWeekend
+                      ? "rgba(148,163,184,0.10)"
                       : "rgba(148,163,184,0.06)",
                   }}
                 >
-                  <span className="text-xs font-medium">{date.getDate()}</span>
+                  <span className={`text-xs font-semibold ${isToday ? "text-signal" : ""}`}>{date.getDate()}</span>
                   {totals?.expense > 0 && (
-                    <span className="text-[8px] font-mono tabular text-coral leading-none mt-0.5">
+                    <span className="text-[8px] font-mono tabular text-coral leading-none">
                       {formatShortMoney(totals.expense, totals.currency).replace(/\s?(HUF|EUR|USD)$/, "")}
                     </span>
                   )}
-                  {hasNote && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-signal" />}
+                  {hasNote && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-signal" />}
                 </button>
               );
             })}
@@ -207,6 +244,9 @@ export default function CalendarPage() {
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-signal" /> Van jegyzet
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full ring-2 ring-signal" /> Ma
         </span>
       </div>
 
