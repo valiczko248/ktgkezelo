@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import type { Category, ItemRule, Person, ReceiptItem, Store } from "@/lib/types";
 import { normalizeItemKey } from "@/lib/items";
 import { parseReceiptLines, recognizeReceiptText } from "@/lib/ocr";
-import { fileToDataUrl, stitchImagesVertically } from "@/lib/imageStitch";
+import { fileToDataUrl, normalizeImage, stitchImagesVertically } from "@/lib/imageStitch";
 import { type ItemDraft, type ItemSplitDraft, type ReceiptDraft, emptyItemDraft } from "@/lib/receiptDraft";
 import { Icon, X, Check, Plus, Trash2 } from "./Icon";
 import { AmountInput } from "./AmountInput";
@@ -76,7 +76,7 @@ export function ReceiptSheet({
     if (photos.length === 0) return;
     setOcrRunning(true);
     try {
-      const stitched = photos.length > 1 ? await stitchImagesVertically(photos) : photos[0];
+      const stitched = photos.length > 1 ? await stitchImagesVertically(photos) : await normalizeImage(photos[0]);
       setPhotos([stitched]);
       const text = await recognizeReceiptText(stitched);
       const lines = parseReceiptLines(text).filter((l) => l.guessedPrice !== null);

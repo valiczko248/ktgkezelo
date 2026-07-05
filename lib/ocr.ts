@@ -71,9 +71,12 @@ function looksLikeItem(guessedName: string): boolean {
 }
 
 export async function recognizeReceiptText(imageDataUrl: string): Promise<string> {
-  const { createWorker } = await import("tesseract.js");
+  const { createWorker, PSM } = await import("tesseract.js");
   const worker = await createWorker("hun");
   try {
+    // A blokk egy sűrű, egyoszlopos szövegtömb — ez a mód sokkal jobb eredményt ad,
+    // mint az alapértelmezett "automatikus oldalfelismerés", ami táblázatos blokkon gyakran téved.
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_COLUMN });
     const {
       data: { text },
     } = await worker.recognize(imageDataUrl);
