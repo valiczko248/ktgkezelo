@@ -80,6 +80,11 @@ export function TransactionSheet({
     : 0;
   const splitTotal = splitRows.reduce((s, r) => s + (Number(r.amount) || 0), 0) + receiptSplitTotal;
   const ownShare = (Number(amount) || 0) - splitTotal;
+  const receiptItemsTotal = receiptDraft
+    ? receiptDraft.items.reduce((s, it) => s + (Number(it.total_price) || 0), 0)
+    : 0;
+  const rawReceiptMismatch = receiptItemsTotal - (Number(amount) || 0);
+  const receiptAmountMismatch = hasReceiptItems && Math.abs(rawReceiptMismatch) >= 1 ? rawReceiptMismatch : null;
 
   useEffect(() => {
     if (!categoryId && visibleCategories.length > 0) setCategoryId(visibleCategories[0].id);
@@ -421,35 +426,41 @@ export function TransactionSheet({
           <div className="mb-4">
             <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Blokk</label>
             {receiptDraft ? (
-              <div className="glass rounded-2xl p-3 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-signal/10 flex items-center justify-center shrink-0">
-                  <Icon name="receipt" className="w-4.5 h-4.5 text-signal" />
+              <div className="glass rounded-2xl p-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-signal/10 flex items-center justify-center shrink-0">
+                    <Icon name="receipt" className="w-4.5 h-4.5 text-signal" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">
+                      {stores.find((s) => s.id === receiptDraft.storeId)?.name || "Blokk csatolva"}
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      {receiptDraft.items.length} tétel
+                      {receiptDraft.items.length > 0 &&
+                        ` · ${formatShortMoney(receiptItemsTotal, currency)}`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setReceiptSheetOpen(true)}
+                    className="text-xs font-medium text-signal shrink-0"
+                  >
+                    Szerkesztés
+                  </button>
+                  <button
+                    onClick={() => setReceiptDraft(null)}
+                    className="w-8 h-8 shrink-0 rounded-full bg-coral/10 text-coral flex items-center justify-center"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">
-                    {stores.find((s) => s.id === receiptDraft.storeId)?.name || "Blokk csatolva"}
+                {receiptAmountMismatch !== null && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 mt-2">
+                    <Icon name="alert-triangle" className="w-3.5 h-3.5 shrink-0" />
+                    A tételek összege {Math.abs(receiptAmountMismatch).toLocaleString("hu-HU")} Ft-tal{" "}
+                    {receiptAmountMismatch > 0 ? "több" : "kevesebb"}, mint a tranzakció összege.
                   </p>
-                  <p className="text-xs text-slate-400">
-                    {receiptDraft.items.length} tétel
-                    {receiptDraft.items.length > 0 &&
-                      ` · ${formatShortMoney(
-                        receiptDraft.items.reduce((s, it) => s + (Number(it.total_price) || 0), 0),
-                        currency
-                      )}`}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setReceiptSheetOpen(true)}
-                  className="text-xs font-medium text-signal shrink-0"
-                >
-                  Szerkesztés
-                </button>
-                <button
-                  onClick={() => setReceiptDraft(null)}
-                  className="w-8 h-8 shrink-0 rounded-full bg-coral/10 text-coral flex items-center justify-center"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                )}
               </div>
             ) : (
               <button
@@ -576,6 +587,7 @@ export function TransactionSheet({
           priorItems={priorReceiptItems}
           defaultSplitPersonId={defaultSplitPersonId}
           warnOnPriceChange={warnOnPriceChange}
+          transactionAmount={Number(amount) || 0}
           initialDraft={receiptDraft || emptyReceiptDraft()}
           onClose={() => setReceiptSheetOpen(false)}
           onCreateStore={onCreateStore}

@@ -22,6 +22,7 @@ export function ReceiptSheet({
   priorItems,
   defaultSplitPersonId,
   warnOnPriceChange,
+  transactionAmount,
   initialDraft,
   onClose,
   onSave,
@@ -34,6 +35,7 @@ export function ReceiptSheet({
   priorItems: ReceiptItem[];
   defaultSplitPersonId: string | null;
   warnOnPriceChange: boolean;
+  transactionAmount: number;
   initialDraft: ReceiptDraft | null;
   onClose: () => void;
   onSave: (draft: ReceiptDraft) => void;
@@ -180,6 +182,8 @@ export function ReceiptSheet({
   }
 
   const itemsTotal = items.reduce((s, it) => s + (Number(it.total_price) || 0), 0);
+  const rawMismatch = itemsTotal - transactionAmount;
+  const amountMismatch = Math.abs(rawMismatch) >= 1 ? rawMismatch : null;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center">
@@ -344,6 +348,14 @@ export function ReceiptSheet({
             Összesen: {itemsTotal.toLocaleString("hu-HU")} Ft
           </span>
         </div>
+
+        {items.length > 0 && amountMismatch !== null && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 mb-3 -mt-1">
+            <Icon name="alert-triangle" className="w-3.5 h-3.5 shrink-0" />
+            A tételek összege {Math.abs(amountMismatch).toLocaleString("hu-HU")} Ft-tal{" "}
+            {amountMismatch > 0 ? "több, mint" : "kevesebb, mint"} a tranzakció összege ({transactionAmount.toLocaleString("hu-HU")} Ft).
+          </p>
+        )}
 
         <div className="space-y-3 mb-3">
           {items.map((item, i) => (
